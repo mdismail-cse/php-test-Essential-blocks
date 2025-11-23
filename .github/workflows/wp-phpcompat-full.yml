@@ -56,9 +56,9 @@ jobs:
           WP_DB_PASS: root
         run: |
           sudo service mysql start
-          sudo mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';"
-          sudo mysql -u root -e "FLUSH PRIVILEGES;"
-          mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS ${WP_DB_NAME};"
+          sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';"
+          sudo mysql -e "FLUSH PRIVILEGES;"
+          sudo mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS ${WP_DB_NAME};"
           wp core download --allow-root
           wp config create --dbname=${WP_DB_NAME} --dbuser=${WP_DB_USER} --dbpass="${WP_DB_PASS}" --dbhost=localhost --allow-root --extra-php <<PHP
           define( 'WP_DEBUG', true );
