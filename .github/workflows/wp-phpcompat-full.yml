@@ -105,8 +105,9 @@ jobs:
 
       - name: Login to WordPress admin
         run: |
-          # Get login page and extract nonce
+          # Get login page to initialize cookies
           curl -sSL -c cookies.txt "http://127.0.0.1:8080/wp-login.php" -o /dev/null
+
           # Login with admin credentials
           curl -sSL -b cookies.txt -c cookies.txt \
             -d "log=admin" \
@@ -115,7 +116,16 @@ jobs:
             -d "redirect_to=http://127.0.0.1:8080/wp-admin/" \
             -d "testcookie=1" \
             "http://127.0.0.1:8080/wp-login.php" -o /dev/null
-          echo "Logged in to WordPress admin"
+
+          # Verify login by checking admin page
+          if curl -sSL -b cookies.txt "http://127.0.0.1:8080/wp-admin/" | grep -q "Dashboard"; then
+            echo "✅ Successfully logged in to WordPress admin"
+          else
+            echo "⚠️ Login may have failed, but continuing..."
+          fi
+
+          # Wait a moment for session to stabilize
+          sleep 2
 
       - name: Check admin/editor pages for fatal errors + save HTML
         run: |
