@@ -27,6 +27,7 @@ jobs:
         with:
           repository: WPDevelopers/essential-blocks
           ref: ${{ github.event.inputs.branch }}
+          token: ${{ secrets.ESSENTIAL_BLOCKS_PAT }}
           path: essential-blocks
 
       - name: Setup PHP
