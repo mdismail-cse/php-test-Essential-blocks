@@ -103,6 +103,20 @@ jobs:
             cp wp-content/debug.log reports/${{ matrix.php }}/wpdebug/debug-${{ matrix.php }}.log || true
           fi
 
+      - name: Login to WordPress admin
+        run: |
+          # Get login page and extract nonce
+          curl -sSL -c cookies.txt "http://127.0.0.1:8080/wp-login.php" -o /dev/null
+          # Login with admin credentials
+          curl -sSL -b cookies.txt -c cookies.txt \
+            -d "log=admin" \
+            -d "pwd=admin" \
+            -d "wp-submit=Log+In" \
+            -d "redirect_to=http://127.0.0.1:8080/wp-admin/" \
+            -d "testcookie=1" \
+            "http://127.0.0.1:8080/wp-login.php" -o /dev/null
+          echo "Logged in to WordPress admin"
+
       - name: Check admin/editor pages for fatal errors + save HTML
         run: |
           TARGETS=(
@@ -127,6 +141,10 @@ jobs:
         run: |
           SCREEN_DIR=reports/${{ matrix.php }}/screens
           mkdir -p "$SCREEN_DIR"
+
+          # Extract cookies for Chromium
+          COOKIE_STRING=$(grep -E 'wordpress_logged_in|wordpress_test_cookie' cookies.txt | awk '{print $6"="$7}' | tr '\n' ';' || echo "")
+
           TARGETS=(
             "http://127.0.0.1:8080/wp-admin/admin.php?page=essential-blocks&tab=options admin"
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
@@ -142,7 +160,17 @@ jobs:
             else
               CHROME=chromium
             fi
-            $CHROME --headless --no-sandbox --disable-gpu --window-size=1920,1080 --screenshot="$pngfile" "$url" || echo "screenshot failed for $url"
+
+            # Take screenshot with cookies
+            if [ -n "$COOKIE_STRING" ]; then
+              $CHROME --headless --no-sandbox --disable-gpu --window-size=1920,1080 \
+                --cookie="$COOKIE_STRING" \
+                --screenshot="$pngfile" "$url" || echo "screenshot failed for $url"
+            else
+              $CHROME --headless --no-sandbox --disable-gpu --window-size=1920,1080 \
+                --screenshot="$pngfile" "$url" || echo "screenshot failed for $url"
+            fi
+
             convert "$pngfile" -quality 85 "$jpgfile" || cp "$pngfile" "$jpgfile"
             rm -f "$pngfile" # delete PNG after conversion
           done
@@ -230,7 +258,7 @@ jobs:
           echo "</body></html>" >> final/combined.html
 
       - name: Generate combined PDF
-        run: wkhtmltopdf final/combined.html final/combined.pdf || echo "PDF generation failed"
+        run: wkhtmltopdf --enable-local-file-access final/combined.html final/combined.pdf || echo "PDF generation failed"
 
       - name: Upload FINAL combined artifact
         uses: actions/upload-artifact@v4
