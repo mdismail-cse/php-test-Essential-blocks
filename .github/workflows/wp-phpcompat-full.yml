@@ -6,7 +6,7 @@ on:
       branch:
         description: 'Branch to test'
         required: true
-        default: 'master' # <-- Change this to test any branch manually
+        default: 'main' # <-- Change this to test any branch manually
 
 permissions:
   contents: read
