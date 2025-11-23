@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to test'
+        description: 'Essential Blocks branch to test'
         required: true
-        default: 'main' # <-- Change this to test any branch manually
+        default: 'master' # <-- Change this to test any Essential Blocks branch
 
 permissions:
   contents: read
@@ -22,15 +22,11 @@ jobs:
         php: [7.4, 8.0, 8.1, 8.2, 8.3, 8.4]
 
     steps:
-      - name: Checkout target branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch }}
-
       - name: Checkout Essential Blocks plugin
         uses: actions/checkout@v4
         with:
           repository: WPDevelopers/essential-blocks
+          ref: ${{ github.event.inputs.branch }}
           path: essential-blocks
 
       - name: Setup PHP
