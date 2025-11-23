@@ -46,8 +46,9 @@ jobs:
         run: |
           composer global config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
           composer global require "squizlabs/php_codesniffer:^3.0" "dealerdirect/phpcodesniffer-composer-installer:*" "phpcompatibility/phpcompatibility-wp:*" --no-interaction
-          export PATH="$HOME/.config/composer/vendor/bin:$PATH"
-          phpcs --config-set installed_paths "$HOME/.config/composer/vendor/phpcompatibility/phpcompatibility-wp" || true
+          echo "$HOME/.config/composer/vendor/bin" >> $GITHUB_PATH
+          $HOME/.config/composer/vendor/bin/phpcs --config-set installed_paths $HOME/.config/composer/vendor/phpcompatibility/php-compatibility,$HOME/.config/composer/vendor/phpcompatibility/phpcompatibility-paragonie,$HOME/.config/composer/vendor/phpcompatibility/phpcompatibility-wp
+          $HOME/.config/composer/vendor/bin/phpcs -i
 
       - name: Prepare WordPress
         env:
@@ -88,7 +89,6 @@ jobs:
 
       - name: Run PHPCompatibility scan
         run: |
-          export PATH="$HOME/.config/composer/vendor/bin:$PATH"
           phpcs \
             --standard=PHPCompatibilityWP \
             --runtime-set testVersion "${{ matrix.php }}" \
