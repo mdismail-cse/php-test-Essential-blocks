@@ -45,8 +45,9 @@ jobs:
       - name: Install PHPCompatibilityWP & phpcs installer
         run: |
           composer global config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
+          composer global require "squizlabs/php_codesniffer:^3.0" --no-interaction
           composer global require "dealerdirect/phpcodesniffer-composer-installer:*" --no-interaction
-          composer global require phpcompatibility/phpcompatibility-wp --no-interaction
+          composer global require "phpcompatibility/phpcompatibility-wp:*" --no-interaction
           export PATH="$HOME/.config/composer/vendor/bin:$PATH"
           phpcs --config-set installed_paths "$HOME/.config/composer/vendor/phpcompatibility/phpcompatibility-wp" || true
 
