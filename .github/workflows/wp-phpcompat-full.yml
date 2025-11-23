@@ -1,0 +1,244 @@
+name: WP PHP Compatibility FULL (combined report + screenshots)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test'
+        required: true
+        default: 'demo-branch' # <-- Change this to test any branch manually
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  phpcompat:
+    name: Run compatibility per PHP version
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        php: [7.4, 8.0, 8.1, 8.2, 8.3, 8.4]
+
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Checkout Essential Blocks plugin
+        uses: actions/checkout@v4
+        with:
+          repository: WPDevelopers/essential-blocks
+          path: essential-blocks
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer, phpcs, wp-cli
+          extensions: mbstring, intl, curl, zip, xml, json
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y default-mysql-server chromium-browser wkhtmltopdf imagemagick xsltproc curl wget unzip git
+
+      - name: Install PHPCompatibilityWP & phpcs installer
+        run: |
+          composer global require "dealerdirect/phpcodesniffer-composer-installer:*" --no-interaction
+          composer global require phpcompatibility/phpcompatibility-wp --no-interaction
+          export PATH="$HOME/.config/composer/vendor/bin:$PATH"
+          phpcs --config-set installed_paths "$HOME/.config/composer/vendor/phpcompatibility/phpcompatibility-wp" || true
+
+      - name: Prepare WordPress
+        env:
+          WP_DB_NAME: wp
+          WP_DB_USER: root
+          WP_DB_PASS: ""
+        run: |
+          sudo service mysql start
+          mysql -e "CREATE DATABASE IF NOT EXISTS ${WP_DB_NAME};"
+          wp core download --allow-root
+          wp config create --dbname=${WP_DB_NAME} --dbuser=${WP_DB_USER} --dbpass="${WP_DB_PASS}" --dbhost=localhost --allow-root --extra-php <<PHP
+          define( 'WP_DEBUG', true );
+          define( 'WP_DEBUG_LOG', true );
+          define( 'WP_DEBUG_DISPLAY', false );
+          PHP
+
+      - name: Install WordPress
+        run: |
+          wp db create --allow-root || true
+          wp core install --url="http://127.0.0.1:8080" --title="WP Test" --admin_user="admin" --admin_password="admin" --admin_email="admin@example.com" --skip-email --allow-root
+
+      - name: Copy plugin into WP plugins dir
+        run: |
+          mkdir -p wp-content/plugins/essential-blocks
+          cp -R essential-blocks/* wp-content/plugins/essential-blocks/ || true
+
+      - name: Auto-update plugins and activate
+        run: |
+          wp plugin update --all --allow-root || true
+          wp plugin activate essential-blocks --allow-root || true
+
+      - name: Start WP built-in server
+        run: |
+          nohup wp server --host=127.0.0.1 --port=8080 --path=. --allow-root > wpserver.log 2>&1 &
+          sleep 10
+
+      - name: Create report folders
+        run: mkdir -p reports/${{ matrix.php }}/phpcompat reports/${{ matrix.php }}/fatal reports/${{ matrix.php }}/wpdebug reports/${{ matrix.php }}/screens
+
+      - name: Run PHPCompatibility scan
+        run: |
+          export PATH="$HOME/.config/composer/vendor/bin:$PATH"
+          phpcs \
+            --standard=PHPCompatibilityWP \
+            --runtime-set testVersion "${{ matrix.php }}" \
+            --extensions=php \
+            --report=full \
+            --report-file=reports/${{ matrix.php }}/phpcompat/phpcompat-${{ matrix.php }}.txt \
+            wp-content/plugins/essential-blocks || true
+
+      - name: Save wp debug.log
+        run: |
+          if [ -f wp-content/debug.log ]; then
+            cp wp-content/debug.log reports/${{ matrix.php }}/wpdebug/debug-${{ matrix.php }}.log || true
+          fi
+
+      - name: Check admin/editor pages for fatal errors + save HTML
+        run: |
+          TARGETS=(
+            "http://127.0.0.1:8080/wp-admin/admin.php?page=essential-blocks&tab=options admin"
+            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
+            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
+          )
+          for t in "${TARGETS[@]}"; do
+            url=$(echo "$t" | awk '{print $1}')
+            name=$(echo "$t" | awk '{print $2}')
+            out_html="reports/${{ matrix.php }}/fatal/${name}.html"
+            curl -sSL -b cookies.txt -c cookies.txt "$url" -o "$out_html" || true
+            if grep -Ei "fatal error|parse error|uncaught|exception" "$out_html" >/dev/null 2>&1; then
+              echo "[FATAL] $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              grep -Ei "fatal error|parse error|uncaught|exception" -n "$out_html" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+            else
+              echo "OK: $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+            fi
+          done
+
+      - name: Take viewport screenshots (1920x1080) JPEG
+        run: |
+          SCREEN_DIR=reports/${{ matrix.php }}/screens
+          mkdir -p "$SCREEN_DIR"
+          TARGETS=(
+            "http://127.0.0.1:8080/wp-admin/admin.php?page=essential-blocks&tab=options admin"
+            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
+            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
+          )
+          for t in "${TARGETS[@]}"; do
+            url=$(echo "$t" | awk '{print $1}')
+            name=$(echo "$t" | awk '{print $2}')
+            pngfile="$SCREEN_DIR/${{ matrix.php }}_${name}.png"
+            jpgfile="$SCREEN_DIR/${{ matrix.php }}_${name}.jpg"
+            if command -v chromium-browser >/dev/null 2>&1; then
+              CHROME=chromium-browser
+            else
+              CHROME=chromium
+            fi
+            $CHROME --headless --no-sandbox --disable-gpu --window-size=1920,1080 --screenshot="$pngfile" "$url" || echo "screenshot failed for $url"
+            convert "$pngfile" -quality 85 "$jpgfile" || cp "$pngfile" "$jpgfile"
+            rm -f "$pngfile" # delete PNG after conversion
+          done
+
+      - name: Upload per-PHP artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perphp-reports-${{ matrix.php }}
+          path: reports/${{ matrix.php }}
+          retention-days: 7
+
+  combine:
+    name: Combine all PHP reports into single HTML + PDF (with screenshots)
+    runs-on: ubuntu-latest
+    needs: phpcompat
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: allreports
+
+      - name: Install tools
+        run: sudo apt-get update -y && sudo apt-get install -y wkhtmltopdf imagemagick
+
+      - name: Build combined HTML
+        run: |
+          mkdir -p final
+          cat > final/combined.html <<'HTML'
+          <!doctype html>
+          <html>
+          <head>
+          <meta charset="utf-8"/>
+          <title>Essential Blocks - Combined PHP Compatibility Report</title>
+          <style>
+          body { font-family: Arial; line-height:1.4; margin:20px; color:#222 }
+          pre { background:#f6f6f6; padding:10px; border-radius:6px; overflow:auto }
+          h1,h2,h3 { color:#111 }
+          .screenshot { margin: 10px 0; border: 1px solid #ddd; padding:4px; }
+          .meta { font-size:0.9em; color:#555 }
+          hr { border:none; border-top:1px solid #e0e0e0; margin:30px 0; }
+          </style>
+          </head>
+          <body>
+          <h1>Essential Blocks — Combined PHP Compatibility Report</h1>
+          <p class="meta">Generated on $(date -u)</p>
+          HTML
+
+          echo "<h2>Per-PHP Compatibility Summaries</h2>" >> final/combined.html
+          for dir in allreports/*; do
+            [ -d "$dir" ] || continue
+            dirname=$(basename "$dir")
+            ver=$(echo "$dirname" | sed 's/perphp-reports-//')
+            echo "<h3>PHP: ${ver}</h3>" >> final/combined.html
+            # phpcompat txt
+            if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
+              echo "<h4>PHPCompatibility</h4><pre>" >> final/combined.html
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/phpcompat/phpcompat-${ver}.txt" >> final/combined.html
+              echo "</pre>" >> final/combined.html
+            fi
+            # fatal logs
+            if [ -f "$dir/fatal/fatal-${ver}.log" ]; then
+              echo "<h4>Fatal / Admin Check</h4><pre>" >> final/combined.html
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> final/combined.html
+              echo "</pre>" >> final/combined.html
+            fi
+            # WP debug logs
+            if [ -f "$dir/wpdebug/debug-${ver}.log" ]; then
+              echo "<h4>WP Debug Log</h4><pre>" >> final/combined.html
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/wpdebug/debug-${ver}.log" >> final/combined.html
+              echo "</pre>" >> final/combined.html
+            fi
+            # embed screenshots
+            echo "<h4>Screenshots</h4>" >> final/combined.html
+            for img in "$dir"/screens/*.jpg; do
+              [ -f "$img" ] || continue
+              cp "$img" final/
+              imgname=$(basename "$img")
+              echo "<div class='screenshot'><strong>${imgname}</strong><br/><img src='${imgname}' style='max-width:100%; width:900px; height:auto;'></div>" >> final/combined.html
+              rm -f "$img" # delete after embedding
+            done
+            echo "<hr>" >> final/combined.html
+          done
+
+          echo "</body></html>" >> final/combined.html
+
+      - name: Generate combined PDF
+        run: wkhtmltopdf final/combined.html final/combined.pdf || echo "PDF generation failed"
+
+      - name: Upload FINAL combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: essential-blocks-wp-compat-final
+          path: final/
+          retention-days: 30
