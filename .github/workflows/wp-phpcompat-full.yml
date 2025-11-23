@@ -57,8 +57,9 @@ jobs:
         run: |
           sudo systemctl start mysql
           sudo mysql -e "CREATE DATABASE IF NOT EXISTS ${WP_DB_NAME};"
-          sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';"
-          sudo mysql -e "FLUSH PRIVILEGES;"
+          sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;" 2>&1 || \
+          sudo mysql -e "UPDATE mysql.user SET plugin='mysql_native_password', authentication_string=PASSWORD('root') WHERE User='root' AND Host='localhost'; FLUSH PRIVILEGES;" 2>&1 || \
+          sudo mysql -e "CREATE USER IF NOT EXISTS 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION; FLUSH PRIVILEGES;" 2>&1
           wp core download --allow-root
           wp config create --dbname=${WP_DB_NAME} --dbuser=${WP_DB_USER} --dbpass="${WP_DB_PASS}" --dbhost=localhost --allow-root --extra-php <<PHP
           define( 'WP_DEBUG', true );
