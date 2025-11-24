@@ -127,6 +127,11 @@ jobs:
             -d "testcookie=1" \
             "http://127.0.0.1:8080/wp-login.php" -o /dev/null
 
+          # Debug: Show cookies
+          echo "=== Cookies saved ==="
+          cat cookies.txt
+          echo "===================="
+
           # Verify login by checking admin page
           if curl -sSL -b cookies.txt "http://127.0.0.1:8080/wp-admin/" | grep -q "Dashboard"; then
             echo "✅ Successfully logged in to WordPress admin"
@@ -181,39 +186,69 @@ jobs:
             const page = await browser.newPage();
             await page.setViewport({ width: 1920, height: 1080 });
 
-            // Read and set cookies from curl cookies.txt
+            // Read and set cookies from curl cookies.txt (Netscape format)
             if (fs.existsSync(cookiesFile)) {
               const cookieContent = fs.readFileSync(cookiesFile, 'utf8');
               const cookies = [];
 
+              console.log('Reading cookies from:', cookiesFile);
+
               cookieContent.split('\n').forEach(line => {
-                if (line && !line.startsWith('#') && line.trim()) {
-                  const parts = line.split('\t');
-                  if (parts.length >= 7) {
-                    cookies.push({
-                      name: parts[5],
-                      value: parts[6],
-                      domain: parts[0].startsWith('.') ? parts[0] : '.' + parts[0],
-                      path: parts[2],
-                      expires: parseInt(parts[4]) || -1,
-                      httpOnly: parts[1] === 'TRUE',
-                      secure: parts[3] === 'TRUE'
-                    });
+                // Skip comments and empty lines
+                if (!line || line.startsWith('#') || !line.trim()) {
+                  return;
+                }
+
+                // Netscape cookie format: domain flag path secure expiration name value
+                const parts = line.split('\t');
+                if (parts.length >= 7) {
+                  const domain = parts[0];
+                  const path = parts[2];
+                  const secure = parts[3] === 'TRUE';
+                  const expiration = parts[4];
+                  const name = parts[5];
+                  const value = parts[6];
+
+                  const cookie = {
+                    name: name,
+                    value: value,
+                    domain: domain.startsWith('.') ? domain.substring(1) : domain,
+                    path: path,
+                    secure: secure,
+                    httpOnly: false
+                  };
+
+                  // Only set expiration if it's a valid number and in the future
+                  const expirationNum = parseInt(expiration);
+                  if (expirationNum > 0 && expirationNum > Date.now() / 1000) {
+                    cookie.expires = expirationNum;
                   }
+
+                  cookies.push(cookie);
+                  console.log('Parsed cookie:', name, '=', value.substring(0, 20) + '...');
                 }
               });
 
               if (cookies.length > 0) {
                 await page.setCookie(...cookies);
-                console.log('Set ' + cookies.length + ' cookies');
+                console.log('✅ Set ' + cookies.length + ' cookies');
+              } else {
+                console.log('⚠️ No cookies found in file');
               }
+            } else {
+              console.log('⚠️ Cookie file not found:', cookiesFile);
             }
 
+            console.log('Loading URL:', url);
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+
+            // Wait a bit more for any dynamic content
+            await page.waitForTimeout(2000);
+
             await page.screenshot({ path: outputFile, fullPage: false });
 
             await browser.close();
-            console.log('Screenshot saved to ' + outputFile);
+            console.log('✅ Screenshot saved to ' + outputFile);
           })();
           ENDJS
 
