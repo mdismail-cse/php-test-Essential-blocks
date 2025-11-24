@@ -167,17 +167,16 @@ jobs:
           SCREEN_DIR=reports/${{ matrix.php }}/screens
           mkdir -p "$SCREEN_DIR"
 
-          # Create a Node.js script to take screenshots with cookies using Puppeteer
+          # Create a Node.js script that logs in via Puppeteer and takes screenshots
           cat > screenshot.js <<'ENDJS'
           const puppeteer = require('puppeteer');
-          const fs = require('fs');
 
           (async () => {
             const args = process.argv.slice(2);
-            const url = args[0];
+            const targetUrl = args[0];
             const outputFile = args[1];
-            const cookiesFile = args[2] || 'cookies.txt';
 
+            console.log('🚀 Launching browser...');
             const browser = await puppeteer.launch({
               headless: true,
               args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -186,73 +185,48 @@ jobs:
             const page = await browser.newPage();
             await page.setViewport({ width: 1920, height: 1080 });
 
-            // Read and set cookies from curl cookies.txt (Netscape format)
-            if (fs.existsSync(cookiesFile)) {
-              const cookieContent = fs.readFileSync(cookiesFile, 'utf8');
-              const cookies = [];
+            console.log('🔐 Logging in to WordPress...');
 
-              console.log('Reading cookies from:', cookiesFile);
+            // Go to login page
+            await page.goto('http://127.0.0.1:8080/wp-login.php', { waitUntil: 'networkidle2' });
 
-              cookieContent.split('\n').forEach(line => {
-                // Skip comments and empty lines
-                if (!line || line.startsWith('#') || !line.trim()) {
-                  return;
-                }
+            // Fill in login form
+            await page.type('#user_login', 'admin');
+            await page.type('#user_pass', 'admin');
 
-                // Netscape cookie format: domain flag path secure expiration name value
-                const parts = line.split('\t');
-                if (parts.length >= 7) {
-                  const domain = parts[0];
-                  const path = parts[2];
-                  const secure = parts[3] === 'TRUE';
-                  const expiration = parts[4];
-                  const name = parts[5];
-                  const value = parts[6];
+            // Click login button and wait for navigation
+            await Promise.all([
+              page.waitForNavigation({ waitUntil: 'networkidle2' }),
+              page.click('#wp-submit')
+            ]);
 
-                  const cookie = {
-                    name: name,
-                    value: value,
-                    domain: domain.startsWith('.') ? domain.substring(1) : domain,
-                    path: path,
-                    secure: secure,
-                    httpOnly: false
-                  };
+            console.log('✅ Logged in successfully');
 
-                  // Only set expiration if it's a valid number and in the future
-                  const expirationNum = parseInt(expiration);
-                  if (expirationNum > 0 && expirationNum > Date.now() / 1000) {
-                    cookie.expires = expirationNum;
-                  }
+            // Navigate to target URL
+            console.log('📸 Navigating to:', targetUrl);
+            await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-                  cookies.push(cookie);
-                  console.log('Parsed cookie:', name, '=', value.substring(0, 20) + '...');
-                }
-              });
+            // Wait for page to fully load
+            await page.waitForTimeout(3000);
 
-              if (cookies.length > 0) {
-                await page.setCookie(...cookies);
-                console.log('✅ Set ' + cookies.length + ' cookies');
-              } else {
-                console.log('⚠️ No cookies found in file');
-              }
+            // Check if we're still on login page (login failed)
+            const currentUrl = page.url();
+            if (currentUrl.includes('wp-login.php')) {
+              console.log('⚠️ Still on login page - authentication may have failed');
             } else {
-              console.log('⚠️ Cookie file not found:', cookiesFile);
+              console.log('✅ Successfully navigated to target page');
             }
 
-            console.log('Loading URL:', url);
-            await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-
-            // Wait a bit more for any dynamic content
-            await page.waitForTimeout(2000);
-
+            // Take screenshot
             await page.screenshot({ path: outputFile, fullPage: false });
+            console.log('✅ Screenshot saved to:', outputFile);
 
             await browser.close();
-            console.log('✅ Screenshot saved to ' + outputFile);
           })();
           ENDJS
 
           # Install Puppeteer
+          echo "📦 Installing Puppeteer..."
           npm install puppeteer
 
           TARGETS=(
@@ -267,13 +241,15 @@ jobs:
             pngfile="$SCREEN_DIR/${{ matrix.php }}_${name}.png"
             jpgfile="$SCREEN_DIR/${{ matrix.php }}_${name}.jpg"
 
-            # Take screenshot with Puppeteer (includes cookies)
-            node screenshot.js "$url" "$pngfile" cookies.txt || echo "screenshot failed for $url"
+            echo "📸 Taking screenshot of: $name"
+            # Take screenshot with Puppeteer (logs in automatically)
+            node screenshot.js "$url" "$pngfile" || echo "❌ Screenshot failed for $url"
 
             # Convert to JPEG
             if [ -f "$pngfile" ]; then
               convert "$pngfile" -quality 85 "$jpgfile" || cp "$pngfile" "$jpgfile"
               rm -f "$pngfile"
+              echo "✅ Saved: $jpgfile"
             fi
           done
 
