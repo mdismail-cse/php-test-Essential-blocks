@@ -46,9 +46,19 @@ jobs:
         run: |
           composer global config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
           composer global require "squizlabs/php_codesniffer:^3.0" "dealerdirect/phpcodesniffer-composer-installer:*" "phpcompatibility/phpcompatibility-wp:*" --no-interaction
-          echo "$HOME/.config/composer/vendor/bin" >> $GITHUB_PATH
-          $HOME/.config/composer/vendor/bin/phpcs --config-set installed_paths $HOME/.config/composer/vendor/phpcompatibility/php-compatibility,$HOME/.config/composer/vendor/phpcompatibility/phpcompatibility-paragonie,$HOME/.config/composer/vendor/phpcompatibility/phpcompatibility-wp
-          $HOME/.config/composer/vendor/bin/phpcs -i
+
+          # Determine composer home directory
+          COMPOSER_HOME=$(composer config --global home)
+          echo "Composer home: $COMPOSER_HOME"
+
+          # Add to PATH
+          echo "$COMPOSER_HOME/vendor/bin" >> $GITHUB_PATH
+
+          # Configure phpcs installed paths
+          $COMPOSER_HOME/vendor/bin/phpcs --config-set installed_paths $COMPOSER_HOME/vendor/phpcompatibility/php-compatibility,$COMPOSER_HOME/vendor/phpcompatibility/phpcompatibility-paragonie,$COMPOSER_HOME/vendor/phpcompatibility/phpcompatibility-wp
+
+          # Verify installation
+          $COMPOSER_HOME/vendor/bin/phpcs -i
 
       - name: Prepare WordPress
         env:
