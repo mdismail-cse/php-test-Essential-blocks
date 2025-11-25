@@ -234,8 +234,8 @@ jobs:
             console.log('📸 Navigating to:', targetUrl);
             await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-            // Wait for page to fully load
-            await page.waitForTimeout(3000);
+            // Wait for page to fully load (use setTimeout instead of deprecated waitForTimeout)
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
             // Check if we're still on login page (login failed)
             const currentUrl = page.url();
