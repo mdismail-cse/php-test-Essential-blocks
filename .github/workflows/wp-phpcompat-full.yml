@@ -188,7 +188,7 @@ jobs:
           SCREEN_DIR=reports/${{ matrix.php }}/screens
           mkdir -p "$SCREEN_DIR"
 
-          # Create a Node.js script that uses Application Password for authentication
+          # Create a Node.js script that logs in with regular password (not app password)
           cat > screenshot.js <<'ENDJS'
           const puppeteer = require('puppeteer');
 
@@ -196,7 +196,6 @@ jobs:
             const args = process.argv.slice(2);
             const targetUrl = args[0];
             const outputFile = args[1];
-            const appPassword = args[2];
 
             console.log('🚀 Launching browser...');
             const browser = await puppeteer.launch({
@@ -207,51 +206,61 @@ jobs:
             const page = await browser.newPage();
             await page.setViewport({ width: 1920, height: 1080 });
 
-            console.log('🔐 Authenticating with Application Password...');
+            console.log('🔐 Logging in to WordPress...');
 
-            // Set HTTP Basic Auth header using application password
-            const authHeader = 'Basic ' + Buffer.from('admin:' + appPassword).toString('base64');
-            await page.setExtraHTTPHeaders({
-              'Authorization': authHeader
-            });
-
-            // Alternative: Use cookies-based login
             // Go to login page
-            await page.goto('http://127.0.0.1:8080/wp-login.php', { waitUntil: 'networkidle2' });
+            await page.goto('http://127.0.0.1:8080/wp-login.php', { waitUntil: 'networkidle2', timeout: 30000 });
 
-            // Fill in login form with application password
-            await page.type('#user_login', 'admin');
-            await page.type('#user_pass', appPassword);
+            // Wait for login form to be visible
+            await page.waitForSelector('#user_login', { visible: true, timeout: 5000 });
+            await page.waitForSelector('#user_pass', { visible: true, timeout: 5000 });
+
+            // Fill in login form with regular admin password
+            await page.type('#user_login', 'admin', { delay: 50 });
+            await page.type('#user_pass', 'admin', { delay: 50 });
+
+            console.log('📝 Submitting login form...');
 
             // Click login button and wait for navigation
-            try {
-              await Promise.all([
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }),
-                page.click('#wp-submit')
-              ]);
-              console.log('✅ Logged in successfully');
-            } catch (error) {
-              console.log('⚠️ Login navigation timeout, but continuing...');
+            await Promise.all([
+              page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
+              page.click('#wp-submit')
+            ]);
+
+            // Check if login was successful
+            const afterLoginUrl = page.url();
+            console.log('After login URL:', afterLoginUrl);
+
+            if (afterLoginUrl.includes('wp-login.php')) {
+              console.log('❌ Login failed - still on login page');
+              // Try to get error message
+              const errorMsg = await page.$eval('.message', el => el.textContent).catch(() => 'No error message found');
+              console.log('Error:', errorMsg);
+            } else {
+              console.log('✅ Login successful - redirected to:', afterLoginUrl);
             }
+
+            // Wait a bit for session to stabilize
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
             // Navigate to target URL
             console.log('📸 Navigating to:', targetUrl);
             await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-            // Wait for page to fully load (use setTimeout instead of deprecated waitForTimeout)
+            // Wait for page to fully load
             await new Promise(resolve => setTimeout(resolve, 3000));
 
-            // Check if we're still on login page (login failed)
-            const currentUrl = page.url();
-            if (currentUrl.includes('wp-login.php')) {
-              console.log('⚠️ Still on login page - authentication may have failed');
-              console.log('Current URL:', currentUrl);
+            // Check final URL
+            const finalUrl = page.url();
+            console.log('Final URL:', finalUrl);
+
+            if (finalUrl.includes('wp-login.php')) {
+              console.log('⚠️ Redirected back to login page - authentication failed');
             } else {
-              console.log('✅ Successfully navigated to target page');
-              console.log('Current URL:', currentUrl);
+              console.log('✅ Successfully loaded target page');
             }
 
-            // Take screenshot
+            // Take screenshot regardless
             await page.screenshot({ path: outputFile, fullPage: false });
             console.log('✅ Screenshot saved to:', outputFile);
 
@@ -275,9 +284,12 @@ jobs:
             pngfile="$SCREEN_DIR/${{ matrix.php }}_${name}.png"
             jpgfile="$SCREEN_DIR/${{ matrix.php }}_${name}.jpg"
 
+            echo ""
+            echo "========================================="
             echo "📸 Taking screenshot of: $name"
-            # Take screenshot with Puppeteer using application password
-            node screenshot.js "$url" "$pngfile" "$APP_PASSWORD" || echo "❌ Screenshot failed for $url"
+            echo "========================================="
+            # Take screenshot with Puppeteer using regular password
+            node screenshot.js "$url" "$pngfile" || echo "❌ Screenshot failed for $url"
 
             # Convert to JPEG
             if [ -f "$pngfile" ]; then
