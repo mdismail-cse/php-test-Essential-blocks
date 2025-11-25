@@ -171,11 +171,15 @@ jobs:
             name=$(echo "$t" | awk '{print $2}')
             out_html="reports/${{ matrix.php }}/fatal/${name}.html"
             curl -sSL -b cookies.txt -c cookies.txt "$url" -o "$out_html" || true
-            if grep -Ei "fatal error|parse error|uncaught|exception" "$out_html" >/dev/null 2>&1; then
+
+            # Check for actual PHP fatal errors (not JavaScript code containing these words)
+            # Look for PHP error patterns in HTML output
+            if grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|<b>Notice</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" >/dev/null 2>&1; then
               echo "[FATAL] $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-              grep -Ei "fatal error|parse error|uncaught|exception" -n "$out_html" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" | head -20 >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              echo "---" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
             else
-              echo "OK: $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              echo "✅ OK: $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
             fi
           done
 
@@ -429,17 +433,23 @@ jobs:
             # Fatal error checks
             if [ -f "$dir/fatal/fatal-${ver}.log" ]; then
               fatal_count=$(grep -c "\[FATAL\]" "$dir/fatal/fatal-${ver}.log" 2>/dev/null || echo "0")
+              ok_count=$(grep -c "✅ OK:" "$dir/fatal/fatal-${ver}.log" 2>/dev/null || echo "0")
 
               if [ "$fatal_count" -eq 0 ]; then
                 echo "<h4>✅ Admin Pages Check: <span class='status pass'>PASSED</span></h4>" >> final/combined.html
-                echo "<p>No fatal errors detected on admin pages</p>" >> final/combined.html
+                echo "<p>All ${ok_count} admin pages loaded successfully without fatal errors</p>" >> final/combined.html
+                echo "<details><summary>Show Checked Pages</summary><pre>" >> final/combined.html
+                grep "✅ OK:" "$dir/fatal/fatal-${ver}.log" | sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' >> final/combined.html
+                echo "</pre></details>" >> final/combined.html
               else
                 echo "<h4>❌ Admin Pages Check: <span class='status fail'>FAILED</span></h4>" >> final/combined.html
-                echo "<p><strong>${fatal_count}</strong> fatal errors detected</p>" >> final/combined.html
-                echo "<details><summary>Show Details</summary><pre>" >> final/combined.html
+                echo "<p><strong>${fatal_count}</strong> page(s) with fatal errors detected</p>" >> final/combined.html
+                echo "<details><summary>Show Error Details</summary><pre>" >> final/combined.html
                 sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> final/combined.html
                 echo "</pre></details>" >> final/combined.html
               fi
+            else
+              echo "<h4>⚠️ Admin Pages Check: <span class='status warning'>NOT RUN</span></h4>" >> final/combined.html
             fi
 
             # WP Debug logs (only show if exists and has content)
