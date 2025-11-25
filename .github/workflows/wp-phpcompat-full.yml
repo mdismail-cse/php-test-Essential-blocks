@@ -41,46 +41,6 @@ jobs:
           npm install -g pnpm
           pnpm --version
 
-      - name: Build Essential Blocks plugin
-        run: |
-          mkdir -p reports/${{ matrix.php }}/build
-
-          echo "🔹 Starting Essential Blocks build process..." | tee reports/${{ matrix.php }}/build/build.log
-
-          cd essential-blocks
-
-          # Initialize and update submodules
-          echo "📁 Initializing submodules..." | tee -a ../reports/${{ matrix.php }}/build/build.log
-          git submodule update --init --recursive 2>&1 | tee -a ../reports/${{ matrix.php }}/build/submodule.log || echo "Submodule init failed" >> ../reports/${{ matrix.php }}/setup/errors.log
-
-          # Build src/controls first
-          if [ -d "src/controls" ]; then
-            echo "📁 Building src/controls..." | tee -a ../reports/${{ matrix.php }}/build/build.log
-            cd src/controls
-            pnpm install 2>&1 | tee -a ../../reports/${{ matrix.php }}/build/controls-install.log || echo "Controls pnpm install failed" >> ../../reports/${{ matrix.php }}/setup/errors.log
-            pnpm run build 2>&1 | tee -a ../../reports/${{ matrix.php }}/build/controls-build.log || echo "Controls build failed" >> ../../reports/${{ matrix.php }}/setup/errors.log
-            cd ../..
-          else
-            echo "⚠️ src/controls directory not found, skipping..." | tee -a ../reports/${{ matrix.php }}/build/build.log
-          fi
-
-          # Build root project
-          echo "📁 Building root project..." | tee -a ../reports/${{ matrix.php }}/build/build.log
-          pnpm install 2>&1 | tee -a ../reports/${{ matrix.php }}/build/root-install.log || echo "Root pnpm install failed" >> ../reports/${{ matrix.php }}/setup/errors.log
-          pnpm run build 2>&1 | tee -a ../reports/${{ matrix.php }}/build/root-build.log || echo "Root build failed" >> ../reports/${{ matrix.php }}/setup/errors.log
-
-          cd ..
-
-          echo "✅ Essential Blocks build completed!" | tee -a reports/${{ matrix.php }}/build/build.log
-
-          # Check if build was successful
-          if [ -f "essential-blocks/essential-blocks.php" ]; then
-            echo "✅ Plugin main file found" | tee -a reports/${{ matrix.php }}/build/build.log
-          else
-            echo "⚠️ Plugin main file not found" | tee -a reports/${{ matrix.php }}/build/build.log
-            echo "Plugin build verification failed" >> reports/${{ matrix.php }}/setup/errors.log
-          fi
-
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -155,6 +115,46 @@ jobs:
         run: |
           wp plugin update --all --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-update.log || echo "Plugin update failed" >> reports/${{ matrix.php }}/setup/errors.log
           wp plugin activate essential-blocks --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-activate.log || echo "Plugin activation failed" >> reports/${{ matrix.php }}/setup/errors.log
+
+      - name: Build Essential Blocks plugin
+        run: |
+          mkdir -p reports/${{ matrix.php }}/build
+
+          echo "🔹 Starting Essential Blocks build process..." | tee reports/${{ matrix.php }}/build/build.log
+
+          cd wp-content/plugins/essential-blocks
+
+          # Initialize and update submodules
+          echo "📁 Initializing submodules..." | tee -a ../../../reports/${{ matrix.php }}/build/build.log
+          git submodule update --init --recursive 2>&1 | tee -a ../../../reports/${{ matrix.php }}/build/submodule.log || echo "Submodule init failed" >> ../../../reports/${{ matrix.php }}/setup/errors.log
+
+          # Build src/controls first
+          if [ -d "src/controls" ]; then
+            echo "📁 Building src/controls..." | tee -a ../../../reports/${{ matrix.php }}/build/build.log
+            cd src/controls
+            pnpm install 2>&1 | tee -a ../../../../reports/${{ matrix.php }}/build/controls-install.log || echo "Controls pnpm install failed" >> ../../../../reports/${{ matrix.php }}/setup/errors.log
+            pnpm run build 2>&1 | tee -a ../../../../reports/${{ matrix.php }}/build/controls-build.log || echo "Controls build failed" >> ../../../../reports/${{ matrix.php }}/setup/errors.log
+            cd ../..
+          else
+            echo "⚠️ src/controls directory not found, skipping..." | tee -a ../../../reports/${{ matrix.php }}/build/build.log
+          fi
+
+          # Build root project
+          echo "📁 Building root project..." | tee -a ../../../reports/${{ matrix.php }}/build/build.log
+          pnpm install 2>&1 | tee -a ../../../reports/${{ matrix.php }}/build/root-install.log || echo "Root pnpm install failed" >> ../../../reports/${{ matrix.php }}/setup/errors.log
+          pnpm run build 2>&1 | tee -a ../../../reports/${{ matrix.php }}/build/root-build.log || echo "Root build failed" >> ../../../reports/${{ matrix.php }}/setup/errors.log
+
+          cd ../../..
+
+          echo "✅ Essential Blocks build completed!" | tee -a reports/${{ matrix.php }}/build/build.log
+
+          # Check if build was successful
+          if [ -f "wp-content/plugins/essential-blocks/essential-blocks.php" ]; then
+            echo "✅ Plugin main file found" | tee -a reports/${{ matrix.php }}/build/build.log
+          else
+            echo "⚠️ Plugin main file not found" | tee -a reports/${{ matrix.php }}/build/build.log
+            echo "Plugin build verification failed" >> reports/${{ matrix.php }}/setup/errors.log
+          fi
 
       - name: Create Application Password for admin user
         run: |
