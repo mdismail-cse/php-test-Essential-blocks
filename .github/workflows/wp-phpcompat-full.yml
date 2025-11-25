@@ -312,58 +312,172 @@ jobs:
           <html>
           <head>
           <meta charset="utf-8"/>
-          <title>Essential Blocks - Combined PHP Compatibility Report</title>
+          <title>Essential Blocks - PHP Compatibility Report</title>
           <style>
-          body { font-family: Arial; line-height:1.4; margin:20px; color:#222 }
-          pre { background:#f6f6f6; padding:10px; border-radius:6px; overflow:auto }
-          h1,h2,h3 { color:#111 }
-          .screenshot { margin: 10px 0; border: 1px solid #ddd; padding:4px; }
-          .meta { font-size:0.9em; color:#555 }
-          hr { border:none; border-top:1px solid #e0e0e0; margin:30px 0; }
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; line-height:1.6; margin:0; padding:20px; color:#333; background:#f5f5f5; }
+          .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          h1 { color:#1a1a1a; border-bottom: 3px solid #0073aa; padding-bottom: 10px; }
+          h2 { color:#0073aa; margin-top: 30px; }
+          h3 { color:#333; background: #f0f0f0; padding: 10px; border-left: 4px solid #0073aa; }
+          .summary { background: #e7f5fe; border-left: 4px solid #0073aa; padding: 15px; margin: 20px 0; }
+          .status { display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; font-size: 0.9em; }
+          .pass { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+          .fail { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+          .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+          .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+          pre { background:#f8f9fa; padding:12px; border-radius:4px; overflow:auto; border: 1px solid #dee2e6; font-size: 0.85em; }
+          .screenshot { margin: 15px 0; border: 2px solid #dee2e6; padding:8px; border-radius: 4px; background: #fff; }
+          .screenshot img { border-radius: 4px; }
+          .meta { font-size:0.9em; color:#666; }
+          hr { border:none; border-top:2px solid #e9ecef; margin:40px 0; }
+          table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+          th, td { padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }
+          th { background: #f8f9fa; font-weight: 600; color: #495057; }
+          tr:hover { background: #f8f9fa; }
+          .error-count { font-size: 1.2em; font-weight: bold; }
+          .section { margin: 30px 0; }
           </style>
           </head>
           <body>
-          <h1>Essential Blocks — Combined PHP Compatibility Report</h1>
-          <p class="meta">Generated on $(date -u)</p>
+          <div class="container">
+          <h1>🔍 Essential Blocks — PHP Compatibility Report</h1>
+          <p class="meta">📅 Generated on $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
           HTML
 
-          echo "<h2>Per-PHP Compatibility Summaries</h2>" >> final/combined.html
+          # Build summary table
+          echo '<div class="summary">' >> final/combined.html
+          echo '<h2>📊 Summary</h2>' >> final/combined.html
+          echo '<table>' >> final/combined.html
+          echo '<tr><th>PHP Version</th><th>Compatibility Status</th><th>Errors</th><th>Warnings</th><th>Fatal Errors</th></tr>' >> final/combined.html
+
           for dir in allreports/*; do
             [ -d "$dir" ] || continue
             dirname=$(basename "$dir")
             ver=$(echo "$dirname" | sed 's/perphp-reports-//')
-            echo "<h3>PHP: ${ver}</h3>" >> final/combined.html
-            # phpcompat txt
+
+            # Parse PHPCompatibility results
+            errors=0
+            warnings=0
+            status="PASS"
+            status_class="pass"
+
             if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
-              echo "<h4>PHPCompatibility</h4><pre>" >> final/combined.html
-              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/phpcompat/phpcompat-${ver}.txt" >> final/combined.html
-              echo "</pre>" >> final/combined.html
+              errors=$(grep -c "ERROR" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+              warnings=$(grep -c "WARNING" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+
+              if [ "$errors" -gt 0 ]; then
+                status="FAIL"
+                status_class="fail"
+              elif [ "$warnings" -gt 0 ]; then
+                status="WARNING"
+                status_class="warning"
+              fi
             fi
-            # fatal logs
+
+            # Check for fatal errors
+            fatal_count=0
             if [ -f "$dir/fatal/fatal-${ver}.log" ]; then
-              echo "<h4>Fatal / Admin Check</h4><pre>" >> final/combined.html
-              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> final/combined.html
-              echo "</pre>" >> final/combined.html
+              fatal_count=$(grep -c "\[FATAL\]" "$dir/fatal/fatal-${ver}.log" 2>/dev/null || echo "0")
+              if [ "$fatal_count" -gt 0 ]; then
+                status="FAIL"
+                status_class="fail"
+              fi
             fi
-            # WP debug logs
-            if [ -f "$dir/wpdebug/debug-${ver}.log" ]; then
-              echo "<h4>WP Debug Log</h4><pre>" >> final/combined.html
+
+            echo "<tr>" >> final/combined.html
+            echo "<td><strong>PHP ${ver}</strong></td>" >> final/combined.html
+            echo "<td><span class='status ${status_class}'>${status}</span></td>" >> final/combined.html
+            echo "<td class='error-count' style='color: #dc3545;'>${errors}</td>" >> final/combined.html
+            echo "<td class='error-count' style='color: #ffc107;'>${warnings}</td>" >> final/combined.html
+            echo "<td class='error-count' style='color: #dc3545;'>${fatal_count}</td>" >> final/combined.html
+            echo "</tr>" >> final/combined.html
+          done
+
+          echo '</table>' >> final/combined.html
+          echo '</div>' >> final/combined.html
+
+          # Detailed results per PHP version
+          echo "<h2>📋 Detailed Results</h2>" >> final/combined.html
+
+          for dir in allreports/*; do
+            [ -d "$dir" ] || continue
+            dirname=$(basename "$dir")
+            ver=$(echo "$dirname" | sed 's/perphp-reports-//')
+
+            echo "<div class='section'>" >> final/combined.html
+            echo "<h3>PHP ${ver}</h3>" >> final/combined.html
+
+            # PHPCompatibility results
+            if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
+              errors=$(grep -c "ERROR" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+              warnings=$(grep -c "WARNING" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+
+              if [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ]; then
+                echo "<h4>✅ PHPCompatibility Check: <span class='status pass'>PASSED</span></h4>" >> final/combined.html
+                echo "<p>No compatibility issues found for PHP ${ver}</p>" >> final/combined.html
+              else
+                echo "<h4>⚠️ PHPCompatibility Check: <span class='status fail'>ISSUES FOUND</span></h4>" >> final/combined.html
+                echo "<p><strong>${errors}</strong> errors, <strong>${warnings}</strong> warnings</p>" >> final/combined.html
+                echo "<details><summary>Show Details</summary><pre>" >> final/combined.html
+                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/phpcompat/phpcompat-${ver}.txt" >> final/combined.html
+                echo "</pre></details>" >> final/combined.html
+              fi
+            else
+              echo "<h4>❌ PHPCompatibility Check: <span class='status warning'>NOT RUN</span></h4>" >> final/combined.html
+            fi
+
+            # Fatal error checks
+            if [ -f "$dir/fatal/fatal-${ver}.log" ]; then
+              fatal_count=$(grep -c "\[FATAL\]" "$dir/fatal/fatal-${ver}.log" 2>/dev/null || echo "0")
+
+              if [ "$fatal_count" -eq 0 ]; then
+                echo "<h4>✅ Admin Pages Check: <span class='status pass'>PASSED</span></h4>" >> final/combined.html
+                echo "<p>No fatal errors detected on admin pages</p>" >> final/combined.html
+              else
+                echo "<h4>❌ Admin Pages Check: <span class='status fail'>FAILED</span></h4>" >> final/combined.html
+                echo "<p><strong>${fatal_count}</strong> fatal errors detected</p>" >> final/combined.html
+                echo "<details><summary>Show Details</summary><pre>" >> final/combined.html
+                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> final/combined.html
+                echo "</pre></details>" >> final/combined.html
+              fi
+            fi
+
+            # WP Debug logs (only show if exists and has content)
+            if [ -f "$dir/wpdebug/debug-${ver}.log" ] && [ -s "$dir/wpdebug/debug-${ver}.log" ]; then
+              echo "<h4>📝 WordPress Debug Log</h4>" >> final/combined.html
+              echo "<details><summary>Show Debug Log</summary><pre>" >> final/combined.html
               sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/wpdebug/debug-${ver}.log" >> final/combined.html
-              echo "</pre>" >> final/combined.html
+              echo "</pre></details>" >> final/combined.html
             fi
-            # embed screenshots
-            echo "<h4>Screenshots</h4>" >> final/combined.html
+
+            # Screenshots
+            screenshot_count=0
             for img in "$dir"/screens/*.jpg; do
-              [ -f "$img" ] || continue
-              cp "$img" final/
-              imgname=$(basename "$img")
-              echo "<div class='screenshot'><strong>${imgname}</strong><br/><img src='${imgname}' style='max-width:100%; width:900px; height:auto;'></div>" >> final/combined.html
-              rm -f "$img" # delete after embedding
+              [ -f "$img" ] && screenshot_count=$((screenshot_count + 1))
             done
+
+            if [ "$screenshot_count" -gt 0 ]; then
+              echo "<h4>📸 Screenshots (${screenshot_count})</h4>" >> final/combined.html
+              for img in "$dir"/screens/*.jpg; do
+                [ -f "$img" ] || continue
+                cp "$img" final/
+                imgname=$(basename "$img")
+                # Extract page name from filename
+                pagename=$(echo "$imgname" | sed "s/${ver}_//" | sed 's/.jpg$//' | sed 's/_/ /g')
+                echo "<div class='screenshot'>" >> final/combined.html
+                echo "<strong>📄 ${pagename}</strong><br/>" >> final/combined.html
+                echo "<img src='${imgname}' style='max-width:100%; width:900px; height:auto;'>" >> final/combined.html
+                echo "</div>" >> final/combined.html
+              done
+            else
+              echo "<h4>📸 Screenshots: <span class='status warning'>NOT AVAILABLE</span></h4>" >> final/combined.html
+            fi
+
+            echo "</div>" >> final/combined.html
             echo "<hr>" >> final/combined.html
           done
 
-          echo "</body></html>" >> final/combined.html
+          echo "</div></body></html>" >> final/combined.html
 
       - name: Generate combined PDF
         run: wkhtmltopdf --enable-local-file-access final/combined.html final/combined.pdf || echo "PDF generation failed"
