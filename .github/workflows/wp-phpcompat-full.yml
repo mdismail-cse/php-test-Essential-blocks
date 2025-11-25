@@ -486,25 +486,69 @@ jobs:
             dirname=$(basename "$dir")
             ver=$(echo "$dirname" | sed 's/perphp-reports-//')
 
+            # Initialize individual error report for this PHP version
+            has_errors=false
+            error_report="final/php-${ver}-errors.html"
+
+            # Start individual error report
+            cat > "$error_report" <<ERRHTML
+          <!doctype html>
+          <html>
+          <head>
+          <meta charset="utf-8"/>
+          <title>PHP ${ver} - Error Report</title>
+          <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; line-height:1.6; margin:0; padding:20px; color:#333; background:#f5f5f5; }
+          .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+          h1 { color:#dc3545; border-bottom: 3px solid #dc3545; padding-bottom: 10px; }
+          h2 { color:#721c24; margin-top: 30px; }
+          h3 { color:#333; background: #f8d7da; padding: 10px; border-left: 4px solid #dc3545; }
+          pre { background:#f8f9fa; padding:12px; border-radius:4px; overflow:auto; border: 1px solid #dee2e6; font-size: 0.85em; }
+          .error { background: #f8d7da; border-left: 4px solid #dc3545; padding: 15px; margin: 20px 0; }
+          .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }
+          .meta { font-size:0.9em; color:#666; }
+          </style>
+          </head>
+          <body>
+          <div class="container">
+          <h1>🔴 PHP ${ver} - Error Report</h1>
+          <p class="meta">📅 Generated on $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
+          ERRHTML
+
             echo "<div class='section'>" >> final/combined.html
             echo "<h3>PHP ${ver}</h3>" >> final/combined.html
 
             # Check for setup errors
             if [ -f "$dir/setup/errors.log" ] && [ -s "$dir/setup/errors.log" ]; then
+              has_errors=true
               echo "<h4>⚠️ Setup Errors: <span class='status warning'>ERRORS OCCURRED</span></h4>" >> final/combined.html
               echo "<p>Some setup steps failed. This may affect test results.</p>" >> final/combined.html
               echo "<details><summary>Show Setup Errors</summary><pre>" >> final/combined.html
               sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/setup/errors.log" >> final/combined.html
               echo "</pre></details>" >> final/combined.html
 
+              # Add to individual error report
+              echo "<h2>⚠️ Setup Errors</h2>" >> "$error_report"
+              echo "<div class='warning'>" >> "$error_report"
+              echo "<p><strong>Some setup steps failed. This may affect test results.</strong></p>" >> "$error_report"
+              echo "<pre>" >> "$error_report"
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/setup/errors.log" >> "$error_report"
+              echo "</pre></div>" >> "$error_report"
+
               # Show setup logs for debugging
               echo "<details><summary>Show All Setup Logs</summary>" >> final/combined.html
+              echo "<h3>Setup Logs</h3>" >> "$error_report"
               for setuplog in "$dir"/setup/*.log; do
                 [ -f "$setuplog" ] || continue
                 logname=$(basename "$setuplog")
                 echo "<h5>${logname}</h5><pre>" >> final/combined.html
                 sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$setuplog" | head -50 >> final/combined.html
                 echo "</pre>" >> final/combined.html
+
+                # Add to individual error report
+                echo "<h4>${logname}</h4><pre>" >> "$error_report"
+                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$setuplog" >> "$error_report"
+                echo "</pre>" >> "$error_report"
               done
               echo "</details>" >> final/combined.html
             else
@@ -521,11 +565,20 @@ jobs:
                 echo "<h4>✅ PHPCompatibility Check: <span class='status pass'>PASSED</span></h4>" >> final/combined.html
                 echo "<p>No compatibility issues found for PHP ${ver}</p>" >> final/combined.html
               else
+                has_errors=true
                 echo "<h4>⚠️ PHPCompatibility Check: <span class='status fail'>ISSUES FOUND</span></h4>" >> final/combined.html
                 echo "<p><strong>${errors}</strong> errors, <strong>${warnings}</strong> warnings</p>" >> final/combined.html
                 echo "<details><summary>Show Details</summary><pre>" >> final/combined.html
                 sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/phpcompat/phpcompat-${ver}.txt" >> final/combined.html
                 echo "</pre></details>" >> final/combined.html
+
+                # Add to individual error report
+                echo "<h2>⚠️ PHPCompatibility Check - Issues Found</h2>" >> "$error_report"
+                echo "<div class='error'>" >> "$error_report"
+                echo "<p><strong>${errors}</strong> errors, <strong>${warnings}</strong> warnings found</p>" >> "$error_report"
+                echo "<pre>" >> "$error_report"
+                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/phpcompat/phpcompat-${ver}.txt" >> "$error_report"
+                echo "</pre></div>" >> "$error_report"
               fi
             else
               echo "<h4>❌ PHPCompatibility Check: <span class='status warning'>NOT RUN</span></h4>" >> final/combined.html
@@ -543,11 +596,20 @@ jobs:
                 grep "✅ OK:" "$dir/fatal/fatal-${ver}.log" | sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' >> final/combined.html
                 echo "</pre></details>" >> final/combined.html
               else
+                has_errors=true
                 echo "<h4>❌ Admin Pages Check: <span class='status fail'>FAILED</span></h4>" >> final/combined.html
                 echo "<p><strong>${fatal_count}</strong> page(s) with fatal errors detected</p>" >> final/combined.html
                 echo "<details><summary>Show Error Details</summary><pre>" >> final/combined.html
                 sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> final/combined.html
                 echo "</pre></details>" >> final/combined.html
+
+                # Add to individual error report
+                echo "<h2>❌ Admin Pages Check - Fatal Errors</h2>" >> "$error_report"
+                echo "<div class='error'>" >> "$error_report"
+                echo "<p><strong>${fatal_count}</strong> page(s) with fatal errors detected</p>" >> "$error_report"
+                echo "<pre>" >> "$error_report"
+                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> "$error_report"
+                echo "</pre></div>" >> "$error_report"
               fi
             else
               echo "<h4>⚠️ Admin Pages Check: <span class='status warning'>NOT RUN</span></h4>" >> final/combined.html
@@ -555,10 +617,18 @@ jobs:
 
             # WP Debug logs (only show if exists and has content)
             if [ -f "$dir/wpdebug/debug-${ver}.log" ] && [ -s "$dir/wpdebug/debug-${ver}.log" ]; then
+              has_errors=true
               echo "<h4>📝 WordPress Debug Log</h4>" >> final/combined.html
               echo "<details><summary>Show Debug Log</summary><pre>" >> final/combined.html
               sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/wpdebug/debug-${ver}.log" >> final/combined.html
               echo "</pre></details>" >> final/combined.html
+
+              # Add to individual error report
+              echo "<h2>📝 WordPress Debug Log</h2>" >> "$error_report"
+              echo "<div class='warning'>" >> "$error_report"
+              echo "<pre>" >> "$error_report"
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/wpdebug/debug-${ver}.log" >> "$error_report"
+              echo "</pre></div>" >> "$error_report"
             fi
 
             # Screenshots
@@ -582,6 +652,17 @@ jobs:
               done
             else
               echo "<h4>📸 Screenshots: <span class='status warning'>NOT AVAILABLE</span></h4>" >> final/combined.html
+            fi
+
+            # Close individual error report
+            echo "</div></body></html>" >> "$error_report"
+
+            # Only keep the error report if there were actual errors
+            if [ "$has_errors" = false ]; then
+              rm -f "$error_report"
+              echo "<p><em>✅ No individual error report needed - all checks passed</em></p>" >> final/combined.html
+            else
+              echo "<p><em>📄 Detailed error report: <a href='php-${ver}-errors.html'>php-${ver}-errors.html</a></em></p>" >> final/combined.html
             fi
 
             echo "</div>" >> final/combined.html
