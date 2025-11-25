@@ -19,7 +19,7 @@ jobs:
 
     strategy:
       matrix:
-        php: [7.4]
+        php: [7.0]
 
     steps:
       - name: Checkout Essential Blocks plugin
@@ -162,7 +162,7 @@ jobs:
       - name: Check admin/editor pages for fatal errors + save HTML
         run: |
           TARGETS=(
-            "http://127.0.0.1:8080/wp-admin/admin.php?page=essential-blocks&tab=options admin"
+            "http://127.0.0.1:8080/wp-admin/admin.php admin"
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
           )
