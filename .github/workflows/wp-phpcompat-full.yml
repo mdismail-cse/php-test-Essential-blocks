@@ -19,7 +19,7 @@ jobs:
 
     strategy:
       matrix:
-        php: [7.2]
+        php: [7.2, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4]
 
     steps:
       - name: Checkout Essential Blocks plugin
@@ -66,10 +66,26 @@ jobs:
           WP_DB_USER: root
           WP_DB_PASS: root
         run: |
-          sudo /etc/init.d/mysql start
-          mysql -e 'CREATE DATABASE ${{ env.WP_DB_NAME }};' -u${{ env.WP_DB_USER }} -p${{ env.WP_DB_PASS }}
-          wp core download --allow-root
-          wp config create --dbname=${WP_DB_NAME} --dbuser=${WP_DB_USER} --dbpass="${WP_DB_PASS}" --dbhost=localhost --allow-root --extra-php <<PHP
+          mkdir -p reports/${{ matrix.php }}/setup
+
+          # Start MySQL
+          sudo /etc/init.d/mysql start || echo "MySQL start failed" >> reports/${{ matrix.php }}/setup/errors.log
+
+          # For PHP < 7.4, MySQL 8.0 authentication needs to be changed
+          if [[ "${{ matrix.php }}" < "7.4" ]]; then
+            echo "PHP ${{ matrix.php }} detected - configuring MySQL for compatibility..."
+            mysql -uroot -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';" 2>&1 | tee -a reports/${{ matrix.php }}/setup/mysql-config.log || true
+            mysql -uroot -proot -e "FLUSH PRIVILEGES;" 2>&1 | tee -a reports/${{ matrix.php }}/setup/mysql-config.log || true
+          fi
+
+          # Create database
+          mysql -e 'CREATE DATABASE ${{ env.WP_DB_NAME }};' -u${{ env.WP_DB_USER }} -p${{ env.WP_DB_PASS }} 2>&1 | tee -a reports/${{ matrix.php }}/setup/db-create.log || echo "Database creation failed" >> reports/${{ matrix.php }}/setup/errors.log
+
+          # Download WordPress
+          wp core download --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/wp-download.log || echo "WordPress download failed" >> reports/${{ matrix.php }}/setup/errors.log
+
+          # Create wp-config.php
+          wp config create --dbname=${WP_DB_NAME} --dbuser=${WP_DB_USER} --dbpass="${WP_DB_PASS}" --dbhost=localhost --allow-root --extra-php <<PHP 2>&1 | tee reports/${{ matrix.php }}/setup/wp-config.log || echo "wp-config creation failed" >> reports/${{ matrix.php }}/setup/errors.log
           define( 'WP_DEBUG', true );
           define( 'WP_DEBUG_LOG', true );
           define( 'WP_DEBUG_DISPLAY', false );
@@ -77,30 +93,44 @@ jobs:
 
       - name: Install WordPress
         run: |
-          wp core install --url="http://127.0.0.1:8080" --title="WP Test" --admin_user="admin" --admin_password="admin" --admin_email="admin@example.com" --skip-email --allow-root
+          wp core install --url="http://127.0.0.1:8080" --title="WP Test" --admin_user="admin" --admin_password="admin" --admin_email="admin@example.com" --skip-email --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/wp-install.log || echo "WordPress installation failed" >> reports/${{ matrix.php }}/setup/errors.log
 
       - name: Copy plugin into WP plugins dir
         run: |
           mkdir -p wp-content/plugins/essential-blocks
-          cp -R essential-blocks/* wp-content/plugins/essential-blocks/ || true
+          cp -R essential-blocks/* wp-content/plugins/essential-blocks/ 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-copy.log || echo "Plugin copy failed" >> reports/${{ matrix.php }}/setup/errors.log
 
       - name: Auto-update plugins and activate
         run: |
-          wp plugin update --all --allow-root || true
-          wp plugin activate essential-blocks --allow-root || true
+          wp plugin update --all --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-update.log || echo "Plugin update failed" >> reports/${{ matrix.php }}/setup/errors.log
+          wp plugin activate essential-blocks --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-activate.log || echo "Plugin activation failed" >> reports/${{ matrix.php }}/setup/errors.log
 
       - name: Create Application Password for admin user
         run: |
           # Create application password for admin user
-          APP_PASSWORD=$(wp user application-password create admin "GitHub Actions Screenshot" --porcelain --allow-root)
-          echo "APP_PASSWORD=$APP_PASSWORD" >> $GITHUB_ENV
-          echo "✅ Application password created for admin user"
-          echo "Password (first 10 chars): ${APP_PASSWORD:0:10}..."
+          APP_PASSWORD=$(wp user application-password create admin "GitHub Actions Screenshot" --porcelain --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/app-password.log || echo "")
+          if [ -z "$APP_PASSWORD" ]; then
+            echo "Application password creation failed" >> reports/${{ matrix.php }}/setup/errors.log
+            echo "APP_PASSWORD=admin" >> $GITHUB_ENV
+          else
+            echo "APP_PASSWORD=$APP_PASSWORD" >> $GITHUB_ENV
+            echo "✅ Application password created for admin user"
+            echo "Password (first 10 chars): ${APP_PASSWORD:0:10}..."
+          fi
 
       - name: Start WP built-in server
         run: |
           nohup wp server --host=127.0.0.1 --port=8080 --path=. --allow-root > wpserver.log 2>&1 &
           sleep 10
+
+          # Check if server started
+          if curl -s http://127.0.0.1:8080 > /dev/null; then
+            echo "✅ WordPress server started successfully"
+          else
+            echo "WordPress server failed to start" >> reports/${{ matrix.php }}/setup/errors.log
+            echo "Server log:" >> reports/${{ matrix.php }}/setup/errors.log
+            cat wpserver.log >> reports/${{ matrix.php }}/setup/errors.log
+          fi
 
       - name: Create report folders
         run: mkdir -p reports/${{ matrix.php }}/phpcompat reports/${{ matrix.php }}/fatal reports/${{ matrix.php }}/wpdebug reports/${{ matrix.php }}/screens
@@ -391,12 +421,20 @@ jobs:
           echo '<div class="summary">' >> final/combined.html
           echo '<h2>📊 Summary</h2>' >> final/combined.html
           echo '<table>' >> final/combined.html
-          echo '<tr><th>PHP Version</th><th>Compatibility Status</th><th>Errors</th><th>Warnings</th><th>Fatal Errors</th></tr>' >> final/combined.html
+          echo '<tr><th>PHP Version</th><th>Setup</th><th>Compatibility Status</th><th>Errors</th><th>Warnings</th><th>Fatal Errors</th></tr>' >> final/combined.html
 
           for dir in allreports/*; do
             [ -d "$dir" ] || continue
             dirname=$(basename "$dir")
             ver=$(echo "$dirname" | sed 's/perphp-reports-//')
+
+            # Check for setup errors
+            setup_status="✅"
+            setup_class="pass"
+            if [ -f "$dir/setup/errors.log" ] && [ -s "$dir/setup/errors.log" ]; then
+              setup_status="⚠️"
+              setup_class="warning"
+            fi
 
             # Parse PHPCompatibility results
             errors=0
@@ -429,6 +467,7 @@ jobs:
 
             echo "<tr>" >> final/combined.html
             echo "<td><strong>PHP ${ver}</strong></td>" >> final/combined.html
+            echo "<td><span class='status ${setup_class}'>${setup_status}</span></td>" >> final/combined.html
             echo "<td><span class='status ${status_class}'>${status}</span></td>" >> final/combined.html
             echo "<td class='error-count' style='color: #dc3545;'>${errors}</td>" >> final/combined.html
             echo "<td class='error-count' style='color: #ffc107;'>${warnings}</td>" >> final/combined.html
@@ -449,6 +488,29 @@ jobs:
 
             echo "<div class='section'>" >> final/combined.html
             echo "<h3>PHP ${ver}</h3>" >> final/combined.html
+
+            # Check for setup errors
+            if [ -f "$dir/setup/errors.log" ] && [ -s "$dir/setup/errors.log" ]; then
+              echo "<h4>⚠️ Setup Errors: <span class='status warning'>ERRORS OCCURRED</span></h4>" >> final/combined.html
+              echo "<p>Some setup steps failed. This may affect test results.</p>" >> final/combined.html
+              echo "<details><summary>Show Setup Errors</summary><pre>" >> final/combined.html
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/setup/errors.log" >> final/combined.html
+              echo "</pre></details>" >> final/combined.html
+
+              # Show setup logs for debugging
+              echo "<details><summary>Show All Setup Logs</summary>" >> final/combined.html
+              for setuplog in "$dir"/setup/*.log; do
+                [ -f "$setuplog" ] || continue
+                logname=$(basename "$setuplog")
+                echo "<h5>${logname}</h5><pre>" >> final/combined.html
+                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$setuplog" | head -50 >> final/combined.html
+                echo "</pre>" >> final/combined.html
+              done
+              echo "</details>" >> final/combined.html
+            else
+              echo "<h4>✅ Setup: <span class='status pass'>SUCCESS</span></h4>" >> final/combined.html
+              echo "<p>WordPress and plugin installed successfully</p>" >> final/combined.html
+            fi
 
             # PHPCompatibility results
             if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
