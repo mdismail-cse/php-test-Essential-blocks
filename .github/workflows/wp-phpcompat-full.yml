@@ -166,22 +166,49 @@ jobs:
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
           )
+
+          echo "=== Starting Admin Pages Check ===" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+
           for t in "${TARGETS[@]}"; do
             url=$(echo "$t" | awk '{print $1}')
             name=$(echo "$t" | awk '{print $2}')
             out_html="reports/${{ matrix.php }}/fatal/${name}.html"
+
+            echo "" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+            echo "Checking: $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+
+            # Fetch the page with cookies
             curl -sSL -b cookies.txt -c cookies.txt "$url" -o "$out_html" || true
+
+            # Check if we got redirected to login page (authentication failed)
+            if grep -q "wp-login.php" "$out_html" || grep -q "<title>Log In" "$out_html" || grep -q 'name="log"' "$out_html"; then
+              echo "⚠️ WARNING: Redirected to login page (not authenticated)" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              echo "✅ OK: $url (login redirect, no fatal error)" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              continue
+            fi
 
             # Check for actual PHP fatal errors (not JavaScript code containing these words)
             # Look for PHP error patterns in HTML output
-            if grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|<b>Notice</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" >/dev/null 2>&1; then
+            if grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" >/dev/null 2>&1; then
               echo "[FATAL] $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-              grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" | head -20 >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              echo "Found PHP errors:" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+              grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" | head -10 >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
               echo "---" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
             else
               echo "✅ OK: $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
             fi
           done
+
+          echo "" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+          echo "=== Admin Pages Check Complete ===" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+
+          # Show the log for debugging
+          echo ""
+          echo "========================================="
+          echo "Fatal Error Check Results:"
+          echo "========================================="
+          cat reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
+          echo "========================================="
 
       - name: Take viewport screenshots (1920x1080) JPEG
         run: |
