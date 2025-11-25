@@ -89,6 +89,14 @@ jobs:
           wp plugin update --all --allow-root || true
           wp plugin activate essential-blocks --allow-root || true
 
+      - name: Create Application Password for admin user
+        run: |
+          # Create application password for admin user
+          APP_PASSWORD=$(wp user application-password create admin "GitHub Actions Screenshot" --porcelain --allow-root)
+          echo "APP_PASSWORD=$APP_PASSWORD" >> $GITHUB_ENV
+          echo "✅ Application password created for admin user"
+          echo "Password (first 10 chars): ${APP_PASSWORD:0:10}..."
+
       - name: Start WP built-in server
         run: |
           nohup wp server --host=127.0.0.1 --port=8080 --path=. --allow-root > wpserver.log 2>&1 &
@@ -113,30 +121,39 @@ jobs:
             cp wp-content/debug.log reports/${{ matrix.php }}/wpdebug/debug-${{ matrix.php }}.log || true
           fi
 
-      - name: Login to WordPress admin
+      - name: Login to WordPress admin (for HTML checks)
         run: |
           # Get login page to initialize cookies
           curl -sSL -c cookies.txt "http://127.0.0.1:8080/wp-login.php" -o /dev/null
 
-          # Login with admin credentials
+          # Login with admin credentials using application password
           curl -sSL -b cookies.txt -c cookies.txt \
             -d "log=admin" \
-            -d "pwd=admin" \
+            -d "pwd=$APP_PASSWORD" \
             -d "wp-submit=Log+In" \
             -d "redirect_to=http://127.0.0.1:8080/wp-admin/" \
             -d "testcookie=1" \
             "http://127.0.0.1:8080/wp-login.php" -o /dev/null
 
-          # Debug: Show cookies
-          echo "=== Cookies saved ==="
-          cat cookies.txt
-          echo "===================="
-
           # Verify login by checking admin page
           if curl -sSL -b cookies.txt "http://127.0.0.1:8080/wp-admin/" | grep -q "Dashboard"; then
-            echo "✅ Successfully logged in to WordPress admin"
+            echo "✅ Successfully logged in to WordPress admin with application password"
           else
-            echo "⚠️ Login may have failed, but continuing..."
+            echo "⚠️ Login may have failed, trying with regular password..."
+            # Fallback to regular password
+            curl -sSL -b cookies.txt -c cookies.txt \
+              -d "log=admin" \
+              -d "pwd=admin" \
+              -d "wp-submit=Log+In" \
+              -d "redirect_to=http://127.0.0.1:8080/wp-admin/" \
+              -d "testcookie=1" \
+              "http://127.0.0.1:8080/wp-login.php" -o /dev/null
+
+            if curl -sSL -b cookies.txt "http://127.0.0.1:8080/wp-admin/" | grep -q "Dashboard"; then
+              echo "✅ Logged in with regular password"
+            else
+              echo "⚠️ Login failed, but continuing..."
+            fi
           fi
 
           # Wait a moment for session to stabilize
@@ -167,7 +184,7 @@ jobs:
           SCREEN_DIR=reports/${{ matrix.php }}/screens
           mkdir -p "$SCREEN_DIR"
 
-          # Create a Node.js script that logs in via Puppeteer and takes screenshots
+          # Create a Node.js script that uses Application Password for authentication
           cat > screenshot.js <<'ENDJS'
           const puppeteer = require('puppeteer');
 
@@ -175,6 +192,7 @@ jobs:
             const args = process.argv.slice(2);
             const targetUrl = args[0];
             const outputFile = args[1];
+            const appPassword = args[2];
 
             console.log('🚀 Launching browser...');
             const browser = await puppeteer.launch({
@@ -185,22 +203,32 @@ jobs:
             const page = await browser.newPage();
             await page.setViewport({ width: 1920, height: 1080 });
 
-            console.log('🔐 Logging in to WordPress...');
+            console.log('🔐 Authenticating with Application Password...');
 
+            // Set HTTP Basic Auth header using application password
+            const authHeader = 'Basic ' + Buffer.from('admin:' + appPassword).toString('base64');
+            await page.setExtraHTTPHeaders({
+              'Authorization': authHeader
+            });
+
+            // Alternative: Use cookies-based login
             // Go to login page
             await page.goto('http://127.0.0.1:8080/wp-login.php', { waitUntil: 'networkidle2' });
 
-            // Fill in login form
+            // Fill in login form with application password
             await page.type('#user_login', 'admin');
-            await page.type('#user_pass', 'admin');
+            await page.type('#user_pass', appPassword);
 
             // Click login button and wait for navigation
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'networkidle2' }),
-              page.click('#wp-submit')
-            ]);
-
-            console.log('✅ Logged in successfully');
+            try {
+              await Promise.all([
+                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }),
+                page.click('#wp-submit')
+              ]);
+              console.log('✅ Logged in successfully');
+            } catch (error) {
+              console.log('⚠️ Login navigation timeout, but continuing...');
+            }
 
             // Navigate to target URL
             console.log('📸 Navigating to:', targetUrl);
@@ -213,8 +241,10 @@ jobs:
             const currentUrl = page.url();
             if (currentUrl.includes('wp-login.php')) {
               console.log('⚠️ Still on login page - authentication may have failed');
+              console.log('Current URL:', currentUrl);
             } else {
               console.log('✅ Successfully navigated to target page');
+              console.log('Current URL:', currentUrl);
             }
 
             // Take screenshot
@@ -242,8 +272,8 @@ jobs:
             jpgfile="$SCREEN_DIR/${{ matrix.php }}_${name}.jpg"
 
             echo "📸 Taking screenshot of: $name"
-            # Take screenshot with Puppeteer (logs in automatically)
-            node screenshot.js "$url" "$pngfile" || echo "❌ Screenshot failed for $url"
+            # Take screenshot with Puppeteer using application password
+            node screenshot.js "$url" "$pngfile" "$APP_PASSWORD" || echo "❌ Screenshot failed for $url"
 
             # Convert to JPEG
             if [ -f "$pngfile" ]; then
