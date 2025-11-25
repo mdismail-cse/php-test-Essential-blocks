@@ -43,43 +43,47 @@ jobs:
 
       - name: Build Essential Blocks plugin
         run: |
-          mkdir -p reports/${{ matrix.php }}/build
-          mkdir -p reports/${{ matrix.php }}/setup
+          # Store absolute paths
+          WORKSPACE_DIR=$(pwd)
+          REPORTS_DIR="${WORKSPACE_DIR}/reports/${{ matrix.php }}"
 
-          echo "🔹 Starting Essential Blocks build process..." | tee reports/${{ matrix.php }}/build/build.log
+          mkdir -p "${REPORTS_DIR}/build"
+          mkdir -p "${REPORTS_DIR}/setup"
+
+          echo "🔹 Starting Essential Blocks build process..." | tee "${REPORTS_DIR}/build/build.log"
 
           cd essential-blocks
 
           # Initialize and update submodules
-          echo "📁 Initializing submodules..." | tee -a ../reports/${{ matrix.php }}/build/build.log
-          git submodule update --init --recursive 2>&1 | tee -a ../reports/${{ matrix.php }}/build/submodule.log || echo "Submodule init failed" >> ../reports/${{ matrix.php }}/setup/errors.log
+          echo "📁 Initializing submodules..." | tee -a "${REPORTS_DIR}/build/build.log"
+          git submodule update --init --recursive 2>&1 | tee -a "${REPORTS_DIR}/build/submodule.log" || echo "Submodule init failed" >> "${REPORTS_DIR}/setup/errors.log"
 
           # Build src/controls first
           if [ -d "src/controls" ]; then
-            echo "📁 Building src/controls..." | tee -a ../reports/${{ matrix.php }}/build/build.log
+            echo "📁 Building src/controls..." | tee -a "${REPORTS_DIR}/build/build.log"
             cd src/controls
-            pnpm install 2>&1 | tee ../../reports/${{ matrix.php }}/build/controls-install.log || echo "Controls pnpm install failed" >> ../../reports/${{ matrix.php }}/setup/errors.log
-            pnpm run build 2>&1 | tee ../../reports/${{ matrix.php }}/build/controls-build.log || echo "Controls build failed" >> ../../reports/${{ matrix.php }}/setup/errors.log
+            pnpm install 2>&1 | tee "${REPORTS_DIR}/build/controls-install.log" || echo "Controls pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
+            pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/controls-build.log" || echo "Controls build failed" >> "${REPORTS_DIR}/setup/errors.log"
             cd ../..
           else
-            echo "⚠️ src/controls directory not found, skipping..." | tee -a ../reports/${{ matrix.php }}/build/build.log
+            echo "⚠️ src/controls directory not found, skipping..." | tee -a "${REPORTS_DIR}/build/build.log"
           fi
 
           # Build root project
-          echo "📁 Building root project..." | tee -a ../reports/${{ matrix.php }}/build/build.log
-          pnpm install 2>&1 | tee ../reports/${{ matrix.php }}/build/root-install.log || echo "Root pnpm install failed" >> ../reports/${{ matrix.php }}/setup/errors.log
-          pnpm run build 2>&1 | tee ../reports/${{ matrix.php }}/build/root-build.log || echo "Root build failed" >> ../reports/${{ matrix.php }}/setup/errors.log
+          echo "📁 Building root project..." | tee -a "${REPORTS_DIR}/build/build.log"
+          pnpm install 2>&1 | tee "${REPORTS_DIR}/build/root-install.log" || echo "Root pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
+          pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/root-build.log" || echo "Root build failed" >> "${REPORTS_DIR}/setup/errors.log"
 
-          cd ..
+          cd "${WORKSPACE_DIR}"
 
-          echo "✅ Essential Blocks build completed!" | tee -a reports/${{ matrix.php }}/build/build.log
+          echo "✅ Essential Blocks build completed!" | tee -a "${REPORTS_DIR}/build/build.log"
 
           # Check if build was successful
           if [ -f "essential-blocks/essential-blocks.php" ]; then
-            echo "✅ Plugin main file found" | tee -a reports/${{ matrix.php }}/build/build.log
+            echo "✅ Plugin main file found" | tee -a "${REPORTS_DIR}/build/build.log"
           else
-            echo "⚠️ Plugin main file not found" | tee -a reports/${{ matrix.php }}/build/build.log
-            echo "Plugin build verification failed" >> reports/${{ matrix.php }}/setup/errors.log
+            echo "⚠️ Plugin main file not found" | tee -a "${REPORTS_DIR}/build/build.log"
+            echo "Plugin build verification failed" >> "${REPORTS_DIR}/setup/errors.log"
           fi
 
       - name: Setup PHP
