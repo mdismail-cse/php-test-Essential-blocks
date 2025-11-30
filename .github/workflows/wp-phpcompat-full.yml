@@ -19,7 +19,7 @@ jobs:
 
     strategy:
       matrix:
-        php: [7.2, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4]
+        php: [ 8.2 ]
 
     steps:
       - name: Checkout Essential Blocks plugin
@@ -29,6 +29,62 @@ jobs:
           ref: ${{ github.event.inputs.branch }}
           token: ${{ secrets.ESSENTIAL_BLOCKS_PAT }}
           path: essential-blocks
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install pnpm
+        run: |
+          npm install -g pnpm
+          pnpm --version
+
+      - name: Build Essential Blocks plugin
+        run: |
+          # Store absolute paths
+          WORKSPACE_DIR=$(pwd)
+          REPORTS_DIR="${WORKSPACE_DIR}/reports/${{ matrix.php }}"
+
+          mkdir -p "${REPORTS_DIR}/build"
+          mkdir -p "${REPORTS_DIR}/setup"
+
+          echo "🔹 Starting Essential Blocks build process..." | tee "${REPORTS_DIR}/build/build.log"
+
+          cd essential-blocks
+
+          # Initialize and update submodules
+          echo "📁 Initializing submodules..." | tee -a "${REPORTS_DIR}/build/build.log"
+          git submodule update --init --recursive 2>&1 | tee -a "${REPORTS_DIR}/build/submodule.log" || echo "Submodule init failed" >> "${REPORTS_DIR}/setup/errors.log"
+
+          # Build src/controls first
+          if [ -d "src/controls" ]; then
+            echo "📁 Building src/controls..." | tee -a "${REPORTS_DIR}/build/build.log"
+            cd src/controls
+            pnpm install 2>&1 | tee "${REPORTS_DIR}/build/controls-install.log" || echo "Controls pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
+            pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/controls-build.log" || echo "Controls build failed" >> "${REPORTS_DIR}/setup/errors.log"
+            cd ../..
+          else
+            echo "⚠️ src/controls directory not found, skipping..." | tee -a "${REPORTS_DIR}/build/build.log"
+          fi
+
+          # Build root project
+          echo "📁 Building root project..." | tee -a "${REPORTS_DIR}/build/build.log"
+          pnpm install 2>&1 | tee "${REPORTS_DIR}/build/root-install.log" || echo "Root pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
+          pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/root-build.log" || echo "Root build failed" >> "${REPORTS_DIR}/setup/errors.log"
+
+          cd "${WORKSPACE_DIR}"
+
+          echo "✅ Essential Blocks build completed!" | tee -a "${REPORTS_DIR}/build/build.log"
+
+          # Check if build was successful
+          if [ -f "essential-blocks/essential-blocks.php" ]; then
+            echo "✅ Plugin main file found" | tee -a "${REPORTS_DIR}/build/build.log"
+          else
+            echo "⚠️ Plugin main file not found" | tee -a "${REPORTS_DIR}/build/build.log"
+            echo "Plugin build verification failed" >> "${REPORTS_DIR}/setup/errors.log"
+          fi
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -517,6 +573,28 @@ jobs:
 
             echo "<div class='section'>" >> final/combined.html
             echo "<h3>PHP ${ver}</h3>" >> final/combined.html
+
+            # Check for build errors
+            if [ -f "$dir/build/build.log" ]; then
+              echo "<h4>🔨 Plugin Build</h4>" >> final/combined.html
+              echo "<details><summary>Show Build Log</summary><pre>" >> final/combined.html
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/build/build.log" >> final/combined.html
+              echo "</pre></details>" >> final/combined.html
+
+              # Add build logs to individual error report if there were build errors
+              if grep -q "failed" "$dir/setup/errors.log" 2>/dev/null; then
+                echo "<h2>🔨 Plugin Build Logs</h2>" >> "$error_report"
+                echo "<div class='warning'>" >> "$error_report"
+                for buildlog in "$dir"/build/*.log; do
+                  [ -f "$buildlog" ] || continue
+                  logname=$(basename "$buildlog")
+                  echo "<h4>${logname}</h4><pre>" >> "$error_report"
+                  sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$buildlog" >> "$error_report"
+                  echo "</pre>" >> "$error_report"
+                done
+                echo "</div>" >> "$error_report"
+              fi
+            fi
 
             # Check for setup errors
             if [ -f "$dir/setup/errors.log" ] && [ -s "$dir/setup/errors.log" ]; then
