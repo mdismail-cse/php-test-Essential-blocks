@@ -7,6 +7,10 @@ on:
         description: 'Essential Blocks branch to test'
         required: true
         default: 'master' # <-- Change this to test any Essential Blocks branch
+      controls_branch:
+        description: 'src/controls submodule branch to test'
+        required: false
+        default: 'master' # <-- Change this to test any src/controls branch
 
 permissions:
   contents: read
@@ -57,6 +61,17 @@ jobs:
           # Initialize and update submodules
           echo "📁 Initializing submodules..." | tee -a "${REPORTS_DIR}/build/build.log"
           git submodule update --init --recursive 2>&1 | tee -a "${REPORTS_DIR}/build/submodule.log" || echo "Submodule init failed" >> "${REPORTS_DIR}/setup/errors.log"
+
+          # Switch src/controls to specified branch if provided
+          if [ -n "${{ github.event.inputs.controls_branch }}" ] && [ -d "src/controls" ]; then
+            echo "📁 Switching src/controls to branch: ${{ github.event.inputs.controls_branch }}..." | tee -a "${REPORTS_DIR}/build/build.log"
+            cd src/controls
+            git fetch origin 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls git fetch failed" >> "${REPORTS_DIR}/setup/errors.log"
+            git checkout ${{ github.event.inputs.controls_branch }} 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls branch checkout failed" >> "${REPORTS_DIR}/setup/errors.log"
+            git pull origin ${{ github.event.inputs.controls_branch }} 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls git pull failed" >> "${REPORTS_DIR}/setup/errors.log"
+            echo "✅ src/controls switched to branch: ${{ github.event.inputs.controls_branch }}" | tee -a "${REPORTS_DIR}/build/build.log"
+            cd ../..
+          fi
 
           # Build src/controls first
           if [ -d "src/controls" ]; then
