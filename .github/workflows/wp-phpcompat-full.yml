@@ -11,6 +11,10 @@ on:
         description: 'src/controls submodule branch to test'
         required: false
         default: 'master' # <-- Change this to test any src/controls branch
+      pro_branch:
+        description: 'Essential Blocks Pro branch to test'
+        required: false
+        default: 'main' # <-- Change this to test any Essential Blocks Pro branch
 
 permissions:
   contents: read
@@ -23,7 +27,7 @@ jobs:
 
     strategy:
       matrix:
-        php: [ 8.2 ]
+        php: [8.4, 8.3, 8.2, 8.1, 8.0, 7.4 ]
 
     steps:
       - name: Checkout Essential Blocks plugin
@@ -34,6 +38,14 @@ jobs:
           token: ${{ secrets.ESSENTIAL_BLOCKS_PAT }}
           path: essential-blocks
           submodules: recursive
+
+      - name: Checkout Essential Blocks Pro plugin
+        uses: actions/checkout@v4
+        with:
+          repository: WPDevelopers/essential-blocks-pro
+          ref: ${{ github.event.inputs.pro_branch }}
+          token: ${{ secrets.ESSENTIAL_BLOCKS_PAT }}
+          path: essential-blocks-pro
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -101,6 +113,33 @@ jobs:
             echo "Plugin build verification failed" >> "${REPORTS_DIR}/setup/errors.log"
           fi
 
+      - name: Build Essential Blocks Pro plugin
+        run: |
+          # Store absolute paths
+          WORKSPACE_DIR=$(pwd)
+          REPORTS_DIR="${WORKSPACE_DIR}/reports/${{ matrix.php }}"
+
+          echo "🔹 Starting Essential Blocks Pro build process..." | tee -a "${REPORTS_DIR}/build/build.log"
+
+          cd essential-blocks-pro
+
+          # Build Pro plugin (no src/controls submodule)
+          echo "📁 Building Essential Blocks Pro..." | tee -a "${REPORTS_DIR}/build/build.log"
+          pnpm install 2>&1 | tee "${REPORTS_DIR}/build/pro-install.log" || echo "Pro pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
+          pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/pro-build.log" || echo "Pro build failed" >> "${REPORTS_DIR}/setup/errors.log"
+
+          cd "${WORKSPACE_DIR}"
+
+          echo "✅ Essential Blocks Pro build completed!" | tee -a "${REPORTS_DIR}/build/build.log"
+
+          # Check if Pro build was successful
+          if [ -f "essential-blocks-pro/essential-blocks-pro.php" ]; then
+            echo "✅ Pro plugin main file found" | tee -a "${REPORTS_DIR}/build/build.log"
+          else
+            echo "⚠️ Pro plugin main file not found" | tee -a "${REPORTS_DIR}/build/build.log"
+            echo "Pro plugin build verification failed" >> "${REPORTS_DIR}/setup/errors.log"
+          fi
+
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -166,15 +205,21 @@ jobs:
         run: |
           wp core install --url="http://127.0.0.1:8080" --title="WP Test" --admin_user="admin" --admin_password="admin" --admin_email="admin@example.com" --skip-email --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/wp-install.log || echo "WordPress installation failed" >> reports/${{ matrix.php }}/setup/errors.log
 
-      - name: Copy plugin into WP plugins dir
+      - name: Copy plugins into WP plugins dir
         run: |
+          # Copy Essential Blocks (free)
           mkdir -p wp-content/plugins/essential-blocks
           cp -R essential-blocks/* wp-content/plugins/essential-blocks/ 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-copy.log || echo "Plugin copy failed" >> reports/${{ matrix.php }}/setup/errors.log
+          
+          # Copy Essential Blocks Pro
+          mkdir -p wp-content/plugins/essential-blocks-pro
+          cp -R essential-blocks-pro/* wp-content/plugins/essential-blocks-pro/ 2>&1 | tee reports/${{ matrix.php }}/setup/pro-plugin-copy.log || echo "Pro plugin copy failed" >> reports/${{ matrix.php }}/setup/errors.log
 
       - name: Auto-update plugins and activate
         run: |
           wp plugin update --all --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-update.log || echo "Plugin update failed" >> reports/${{ matrix.php }}/setup/errors.log
           wp plugin activate essential-blocks --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-activate.log || echo "Plugin activation failed" >> reports/${{ matrix.php }}/setup/errors.log
+          wp plugin activate essential-blocks-pro --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/pro-plugin-activate.log || echo "Pro plugin activation failed" >> reports/${{ matrix.php }}/setup/errors.log
 
       - name: Create Application Password for admin user
         run: |
@@ -401,6 +446,7 @@ jobs:
           npm install puppeteer
 
           TARGETS=(
+            "http://127.0.0.1:8080/wp-admin/plugins.php plugins"
             "http://127.0.0.1:8080/wp-admin/admin.php?page=essential-blocks&tab=options admin"
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
