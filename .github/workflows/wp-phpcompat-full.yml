@@ -824,31 +824,22 @@ jobs:
 
       - name: Prepare GitHub Pages deployment
         run: |
-          mkdir -p gh-pages-deploy/reports/${{ github.run_number }}
-          cp final/combined.html gh-pages-deploy/reports/${{ github.run_number }}/index.html
+          # Create deployment directory
+          mkdir -p gh-pages-deploy
 
-          # Create root index.html that redirects to latest report
-          cat > gh-pages-deploy/index.html <<'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <meta http-equiv="refresh" content="0; url=reports/${{ github.run_number }}/index.html">
-            <title>Redirecting to Latest Report...</title>
-          </head>
-          <body>
-            <p>Redirecting to latest report...</p>
-            <p>If not redirected, <a href="reports/${{ github.run_number }}/index.html">click here</a>.</p>
-          </body>
-          </html>
-          EOF
+          # Copy only combined.html and rename to index.html
+          cp final/combined.html gh-pages-deploy/index.html
+
+          # Create .nojekyll to prevent Jekyll processing
+          touch gh-pages-deploy/.nojekyll
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./gh-pages-deploy
-          keep_files: true
+          keep_files: false
+          force_orphan: true
           user_name: 'github-actions[bot]'
           user_email: 'github-actions[bot]@users.noreply.github.com'
           commit_message: 'Deploy report for run #${{ github.run_number }}'
