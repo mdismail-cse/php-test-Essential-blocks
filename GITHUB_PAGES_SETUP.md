@@ -19,12 +19,12 @@ https://<your-username>.github.io/<repo-name>/
 - ❌ Screenshots (not deployed - available in artifacts)
 
 **Features:**
-- ✅ **Permanent URLs** - Each report gets a unique URL based on run number
-- ✅ **Latest Report** - Root URL always redirects to the most recent report
-- ✅ **History** - All previous reports remain accessible
+- ✅ **Always Latest** - Each deployment replaces the previous one
+- ✅ **Single URL** - Always the same URL for the latest report
 - ✅ **No Downloads** - View reports directly in browser
 - ✅ **Easy Sharing** - Share URLs with team members
 - ✅ **Lightweight** - Only HTML, no large files
+- ✅ **Clean History** - Old reports are replaced (not kept)
 
 ---
 
@@ -70,20 +70,14 @@ https://mdismail.github.io/php-test-Essential-blocks/
 
 ## 📂 URL Structure
 
-### **Latest Report (Auto-Redirect)**
+### **Latest Report (Always Same URL)**
 ```
 https://<your-username>.github.io/<repo-name>/
 ```
-- Always redirects to the most recent report
+- **Always shows the most recent report**
+- Each new workflow run replaces the previous report
 - Bookmark this URL for quick access
-
-### **Specific Report by Run Number**
-```
-https://<your-username>.github.io/<repo-name>/reports/<run-number>/
-```
-- Example: `https://mdismail-cse.github.io/php-test-Essential-blocks/reports/42/`
-- Permanent URL for a specific test run
-- Useful for tracking issues over time
+- Example: `https://mdismail-cse.github.io/php-test-Essential-blocks/`
 
 ### **What About Other Files?**
 
@@ -91,6 +85,12 @@ https://<your-username>.github.io/<repo-name>/reports/<run-number>/
 - ❌ Not deployed to GitHub Pages
 - ✅ Available in GitHub Actions artifacts
 - Download from: Actions → Workflow Run → Artifacts → `essential-blocks-wp-compat-final`
+
+### **What About Report History?**
+
+- ❌ Old reports are **NOT kept** on GitHub Pages
+- ✅ Each deployment replaces the previous one
+- ✅ Old reports are still available in GitHub Actions artifacts (30 days retention)
 
 ---
 
@@ -109,17 +109,14 @@ https://<your-username>.github.io/<repo-name>/reports/<run-number>/
 
 ```
 gh-pages/
-├── index.html                           # Redirects to latest report
-└── reports/
-    ├── 1/                               # Run #1
-    │   └── index.html                   # combined.html (renamed)
-    ├── 2/                               # Run #2
-    │   └── index.html
-    └── 42/                              # Run #42 (latest)
-        └── index.html
+├── .nojekyll                            # Prevents Jekyll processing
+└── index.html                           # Latest combined.html report
 ```
 
-**Note:** Only `combined.html` is deployed (renamed to `index.html` for clean URLs)
+**Note:**
+- Only `combined.html` is deployed (renamed to `index.html`)
+- Each deployment completely replaces the previous one
+- No subdirectories, no old reports kept
 
 ---
 
@@ -143,14 +140,14 @@ gh-pages/
 - Download the full artifact to view screenshots
 - Only the HTML report is hosted on GitHub Pages
 
-### **Issue: Old Reports Not Accessible**
+### **Issue: Need to Access Old Reports**
 
-**Cause:** `keep_files: true` not set
+**Cause:** Old reports are replaced with each deployment
 
 **Solution:**
-- Already configured in workflow
-- Each deployment preserves previous reports
-- Check `gh-pages` branch to verify files exist
+- Download artifacts from previous workflow runs
+- Artifacts are kept for 30 days
+- Go to Actions → Select workflow run → Download artifact
 
 ### **Issue: PDF Not Generated**
 
