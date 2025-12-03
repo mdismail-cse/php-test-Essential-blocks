@@ -17,8 +17,10 @@ on:
         default: 'main' # <-- Change this to test any Essential Blocks Pro branch
 
 permissions:
-  contents: read
+  contents: write  # Changed from 'read' to 'write' for GitHub Pages deployment
   actions: write
+  pages: write
+  id-token: write
 
 jobs:
   phpcompat:
@@ -446,6 +448,7 @@ jobs:
           npm install puppeteer
 
           TARGETS=(
+            "http://127.0.0.1:8080/wp-admin/ dashboard"
             "http://127.0.0.1:8080/wp-admin/plugins.php plugins"
             "http://127.0.0.1:8080/wp-admin/admin.php?page=essential-blocks&tab=options admin"
             "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
@@ -497,6 +500,11 @@ jobs:
       - name: Build combined HTML
         run: |
           mkdir -p final
+
+          # Get current date/time
+          REPORT_DATE=$(date -u '+%B %d, %Y at %H:%M:%S UTC')
+          WORKFLOW_RUN="${{ github.run_number }}"
+
           cat > final/combined.html <<'HTML'
           <!doctype html>
           <html>
@@ -518,7 +526,8 @@ jobs:
           pre { background:#f8f9fa; padding:12px; border-radius:4px; overflow:auto; border: 1px solid #dee2e6; font-size: 0.85em; }
           .screenshot { margin: 15px 0; border: 2px solid #dee2e6; padding:8px; border-radius: 4px; background: #fff; }
           .screenshot img { border-radius: 4px; }
-          .meta { font-size:0.9em; color:#666; }
+          .meta { font-size:0.9em; color:#666; margin: 10px 0; }
+          .report-header { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; border-left: 4px solid #0073aa; }
           hr { border:none; border-top:2px solid #e9ecef; margin:40px 0; }
           table { width: 100%; border-collapse: collapse; margin: 20px 0; }
           th, td { padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }
@@ -531,8 +540,17 @@ jobs:
           <body>
           <div class="container">
           <h1>🔍 Essential Blocks — PHP Compatibility Report</h1>
-          <p class="meta">📅 Generated on $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
           HTML
+
+          # Add report metadata
+          cat >> final/combined.html <<EOF
+          <div class="report-header">
+            <p class="meta"><strong>📅 Generated:</strong> ${REPORT_DATE}</p>
+            <p class="meta"><strong>🔢 Workflow Run:</strong> #${WORKFLOW_RUN}</p>
+            <p class="meta"><strong>🔗 Repository:</strong> ${{ github.repository }}</p>
+            <p class="meta"><strong>🌿 Branch:</strong> ${{ github.event.inputs.branch || 'master' }}</p>
+          </div>
+          EOF
 
           # Build summary table
           echo '<div class="summary">' >> final/combined.html
@@ -819,3 +837,28 @@ jobs:
           name: essential-blocks-wp-compat-final
           path: final/
           retention-days: 30
+
+      - name: Prepare GitHub Pages deployment
+        run: |
+          # Create deployment directory
+          mkdir -p gh-pages-deploy
+
+          # Copy combined.html and rename to index.html
+          cp final/combined.html gh-pages-deploy/index.html
+
+          # Copy all screenshot images
+          cp final/*.jpg gh-pages-deploy/ 2>/dev/null || true
+
+          # Create .nojekyll to prevent Jekyll processing
+          touch gh-pages-deploy/.nojekyll
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./gh-pages-deploy
+          keep_files: false
+          force_orphan: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy report for run #${{ github.run_number }}'
