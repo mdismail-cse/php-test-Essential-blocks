@@ -17,8 +17,10 @@ on:
         default: 'main' # <-- Change this to test any Essential Blocks Pro branch
 
 permissions:
-  contents: read
+  contents: write  # Changed from 'read' to 'write' for GitHub Pages deployment
   actions: write
+  pages: write
+  id-token: write
 
 jobs:
   phpcompat:
@@ -819,3 +821,30 @@ jobs:
           name: essential-blocks-wp-compat-final
           path: final/
           retention-days: 30
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./final
+          destination_dir: reports/${{ github.run_number }}
+          keep_files: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy report for run #${{ github.run_number }}'
+
+      - name: Create latest symlink
+        run: |
+          cd final
+          echo '<meta http-equiv="refresh" content="0; url=../reports/${{ github.run_number }}/combined.html">' > index.html
+
+      - name: Deploy latest redirect
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./final
+          destination_dir: .
+          keep_files: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Update latest report redirect'
