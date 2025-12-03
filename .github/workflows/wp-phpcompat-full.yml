@@ -827,8 +827,11 @@ jobs:
           # Create deployment directory
           mkdir -p gh-pages-deploy
 
-          # Copy only combined.html and rename to index.html
+          # Copy combined.html and rename to index.html
           cp final/combined.html gh-pages-deploy/index.html
+
+          # Copy all screenshot images
+          cp final/*.jpg gh-pages-deploy/ 2>/dev/null || true
 
           # Create .nojekyll to prevent Jekyll processing
           touch gh-pages-deploy/.nojekyll
