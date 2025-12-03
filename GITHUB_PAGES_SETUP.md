@@ -1,16 +1,22 @@
 # 📄 GitHub Pages Setup for PHP Compatibility Reports
 
-This guide explains how to host your PHP compatibility reports on GitHub Pages, making them accessible via a public URL without downloading artifacts.
+This guide explains how to host your PHP compatibility reports (combined.html only) on GitHub Pages, making them accessible via a public URL without downloading artifacts.
 
 ---
 
 ## 🎯 What This Does
 
-After each workflow run, the combined HTML report (with screenshots and all PHP version results) will be automatically deployed to GitHub Pages at:
+After each workflow run, **only the combined.html report** will be automatically deployed to GitHub Pages at:
 
 ```
 https://<your-username>.github.io/<repo-name>/
 ```
+
+**What's Deployed:**
+- ✅ `combined.html` only (renamed to `index.html`)
+- ❌ PDF files (not deployed - available in artifacts)
+- ❌ Individual error reports (not deployed - available in artifacts)
+- ❌ Screenshots (not deployed - available in artifacts)
 
 **Features:**
 - ✅ **Permanent URLs** - Each report gets a unique URL based on run number
@@ -18,6 +24,7 @@ https://<your-username>.github.io/<repo-name>/
 - ✅ **History** - All previous reports remain accessible
 - ✅ **No Downloads** - View reports directly in browser
 - ✅ **Easy Sharing** - Share URLs with team members
+- ✅ **Lightweight** - Only HTML, no large files
 
 ---
 
@@ -72,25 +79,18 @@ https://<your-username>.github.io/<repo-name>/
 
 ### **Specific Report by Run Number**
 ```
-https://<your-username>.github.io/<repo-name>/reports/<run-number>/combined.html
+https://<your-username>.github.io/<repo-name>/reports/<run-number>/
 ```
-- Example: `https://mdismail.github.io/php-test-Essential-blocks/reports/42/combined.html`
+- Example: `https://mdismail-cse.github.io/php-test-Essential-blocks/reports/42/`
 - Permanent URL for a specific test run
 - Useful for tracking issues over time
 
-### **Individual Error Reports**
-```
-https://<your-username>.github.io/<repo-name>/reports/<run-number>/php-8.2-errors.html
-```
-- Only created if that PHP version had errors
-- Direct link to share with developers
+### **What About Other Files?**
 
-### **Screenshots**
-```
-https://<your-username>.github.io/<repo-name>/reports/<run-number>/8.2_admin.jpg
-```
-- All screenshots are accessible
-- Embedded in HTML reports
+**PDF, Screenshots, Individual Error Reports:**
+- ❌ Not deployed to GitHub Pages
+- ✅ Available in GitHub Actions artifacts
+- Download from: Actions → Workflow Run → Artifacts → `essential-blocks-wp-compat-final`
 
 ---
 
@@ -110,19 +110,16 @@ https://<your-username>.github.io/<repo-name>/reports/<run-number>/8.2_admin.jpg
 ```
 gh-pages/
 ├── index.html                           # Redirects to latest report
-├── reports/
-│   ├── 1/                               # Run #1
-│   │   ├── combined.html
-│   │   ├── combined.pdf
-│   │   ├── php-8.2-errors.html
-│   │   └── *.jpg
-│   ├── 2/                               # Run #2
-│   │   └── ...
-│   └── 42/                              # Run #42 (latest)
-│       ├── combined.html
-│       ├── combined.pdf
-│       └── ...
+└── reports/
+    ├── 1/                               # Run #1
+    │   └── index.html                   # combined.html (renamed)
+    ├── 2/                               # Run #2
+    │   └── index.html
+    └── 42/                              # Run #42 (latest)
+        └── index.html
 ```
+
+**Note:** Only `combined.html` is deployed (renamed to `index.html` for clean URLs)
 
 ---
 
@@ -139,12 +136,12 @@ gh-pages/
 
 ### **Issue: Images Not Loading**
 
-**Cause:** Relative paths in HTML
+**Cause:** Screenshots are not deployed to GitHub Pages
 
-**Solution:** 
-- Images are copied to the same directory as HTML
-- Should work automatically
-- Check browser console for errors
+**Solution:**
+- Screenshots are only available in artifacts
+- Download the full artifact to view screenshots
+- Only the HTML report is hosted on GitHub Pages
 
 ### **Issue: Old Reports Not Accessible**
 
