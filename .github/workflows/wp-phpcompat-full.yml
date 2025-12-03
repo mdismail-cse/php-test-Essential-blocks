@@ -500,6 +500,11 @@ jobs:
       - name: Build combined HTML
         run: |
           mkdir -p final
+
+          # Get current date/time
+          REPORT_DATE=$(date -u '+%B %d, %Y at %H:%M:%S UTC')
+          WORKFLOW_RUN="${{ github.run_number }}"
+
           cat > final/combined.html <<'HTML'
           <!doctype html>
           <html>
@@ -521,7 +526,8 @@ jobs:
           pre { background:#f8f9fa; padding:12px; border-radius:4px; overflow:auto; border: 1px solid #dee2e6; font-size: 0.85em; }
           .screenshot { margin: 15px 0; border: 2px solid #dee2e6; padding:8px; border-radius: 4px; background: #fff; }
           .screenshot img { border-radius: 4px; }
-          .meta { font-size:0.9em; color:#666; }
+          .meta { font-size:0.9em; color:#666; margin: 10px 0; }
+          .report-header { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; border-left: 4px solid #0073aa; }
           hr { border:none; border-top:2px solid #e9ecef; margin:40px 0; }
           table { width: 100%; border-collapse: collapse; margin: 20px 0; }
           th, td { padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }
@@ -534,8 +540,17 @@ jobs:
           <body>
           <div class="container">
           <h1>🔍 Essential Blocks — PHP Compatibility Report</h1>
-          <p class="meta">📅 Generated on $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
           HTML
+
+          # Add report metadata
+          cat >> final/combined.html <<EOF
+          <div class="report-header">
+            <p class="meta"><strong>📅 Generated:</strong> ${REPORT_DATE}</p>
+            <p class="meta"><strong>🔢 Workflow Run:</strong> #${WORKFLOW_RUN}</p>
+            <p class="meta"><strong>🔗 Repository:</strong> ${{ github.repository }}</p>
+            <p class="meta"><strong>🌿 Branch:</strong> ${{ github.event.inputs.branch || 'master' }}</p>
+          </div>
+          EOF
 
           # Build summary table
           echo '<div class="summary">' >> final/combined.html
