@@ -478,6 +478,55 @@ jobs:
             fi
           done
 
+      - name: Take eb-quick-setup screenshot WITHOUT Pro plugin
+        run: |
+          SCREEN_DIR=reports/${{ matrix.php }}/screens
+
+          echo ""
+          echo "========================================="
+          echo "🔌 Deactivating Essential Blocks Pro..."
+          echo "========================================="
+          
+          # Deactivate Essential Blocks Pro
+          wp plugin deactivate essential-blocks-pro --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/pro-deactivate.log || echo "Pro plugin deactivation failed" >> reports/${{ matrix.php }}/setup/errors.log
+          
+          # Verify deactivation
+          if wp plugin list --allow-root | grep essential-blocks-pro | grep -q inactive; then
+            echo "✅ Essential Blocks Pro deactivated successfully"
+          else
+            echo "⚠️ Pro plugin may still be active"
+          fi
+
+          # Wait a moment for WordPress to process the deactivation
+          sleep 2
+
+          echo ""
+          echo "========================================="
+          echo "📸 Taking screenshot of eb-quick-setup WITHOUT Pro"
+          echo "========================================="
+          
+          # Take screenshot of eb-quick-setup without Pro
+          url="http://127.0.0.1:8080/wp-admin/admin.php?page=eb-quick-setup"
+          pngfile="$SCREEN_DIR/${{ matrix.php }}_eb_quick_setup_no_pro.png"
+          jpgfile="$SCREEN_DIR/${{ matrix.php }}_eb_quick_setup_no_pro.jpg"
+          
+          node screenshot.js "$url" "$pngfile" || echo "❌ Screenshot failed for $url"
+          
+          # Convert to JPEG
+          if [ -f "$pngfile" ]; then
+            convert "$pngfile" -quality 85 "$jpgfile" || cp "$pngfile" "$jpgfile"
+            rm -f "$pngfile"
+            echo "✅ Saved: $jpgfile"
+          fi
+
+          echo ""
+          echo "========================================="
+          echo "🔌 Reactivating Essential Blocks Pro..."
+          echo "========================================="
+          
+          # Reactivate Pro plugin for any remaining tests
+          wp plugin activate essential-blocks-pro --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/pro-reactivate.log || echo "Pro plugin reactivation failed" >> reports/${{ matrix.php }}/setup/errors.log
+
       - name: Upload per-PHP artifacts
         uses: actions/upload-artifact@v4
         with:
