@@ -467,8 +467,19 @@ jobs:
             echo "========================================="
             echo "📸 Taking screenshot of: $name"
             echo "========================================="
+
+            if [ "$name" = "eb_quick_setup" ]; then
+              echo "🔧 Deactivating Essential Blocks Pro before quick setup screenshot..." | tee -a reports/${{ matrix.php }}/setup/pro-screenshot.log
+              wp plugin deactivate essential-blocks-pro --allow-root 2>&1 | tee -a reports/${{ matrix.php }}/setup/pro-deactivate.log || true
+            fi
+
             # Take screenshot with Puppeteer using regular password
             node screenshot.js "$url" "$pngfile" || echo "❌ Screenshot failed for $url"
+
+            if [ "$name" = "eb_quick_setup" ]; then
+              echo "🔧 Reactivating Essential Blocks Pro after quick setup screenshot..." | tee -a reports/${{ matrix.php }}/setup/pro-screenshot.log
+              wp plugin activate essential-blocks-pro --allow-root 2>&1 | tee -a reports/${{ matrix.php }}/setup/pro-reactivate.log || true
+            fi
 
             # Convert to JPEG
             if [ -f "$pngfile" ]; then
