@@ -28,8 +28,9 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
-        php: [8.4, 8.3, 8.2, 8.1, 8.0, 7.4 ]
+        php: [8.4, 8.3, 8.2, 8.1, 8.0, 7.4]
 
     steps:
       - name: Checkout Essential Blocks plugin
@@ -49,15 +50,25 @@ jobs:
           token: ${{ secrets.ESSENTIAL_BLOCKS_PAT }}
           path: essential-blocks-pro
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
 
-      - name: Install pnpm
-        run: |
-          npm install -g pnpm
-          pnpm --version
+      - name: Cache Puppeteer / npm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/puppeteer
+          key: npm-puppeteer-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
 
       - name: Build Essential Blocks plugin
         run: |
@@ -152,7 +163,7 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y default-mysql-server chromium-browser wkhtmltopdf imagemagick xsltproc curl wget unzip git
+          sudo apt-get install -y default-mysql-server chromium-browser imagemagick xsltproc curl wget unzip git
 
       - name: Install PHPCompatibilityWP & phpcs installer
         run: |
@@ -239,14 +250,18 @@ jobs:
       - name: Start WP built-in server
         run: |
           nohup wp server --host=127.0.0.1 --port=8080 --path=. --allow-root > wpserver.log 2>&1 &
-          sleep 10
 
-          # Check if server started
-          if curl -s http://127.0.0.1:8080 > /dev/null; then
-            echo "✅ WordPress server started successfully"
-          else
+          # Wait up to 30s for server to become ready
+          for i in {1..15}; do
+            if curl -s http://127.0.0.1:8080 > /dev/null; then
+              echo "✅ WordPress server ready (attempt $i)"
+              break
+            fi
+            sleep 2
+          done
+
+          if ! curl -s http://127.0.0.1:8080 > /dev/null; then
             echo "WordPress server failed to start" >> reports/${{ matrix.php }}/setup/errors.log
-            echo "Server log:" >> reports/${{ matrix.php }}/setup/errors.log
             cat wpserver.log >> reports/${{ matrix.php }}/setup/errors.log
           fi
 
@@ -261,7 +276,8 @@ jobs:
             --extensions=php \
             --report=full \
             --report-file=reports/${{ matrix.php }}/phpcompat/phpcompat-${{ matrix.php }}.txt \
-            wp-content/plugins/essential-blocks || true
+            wp-content/plugins/essential-blocks \
+            wp-content/plugins/essential-blocks-pro || true
 
       - name: Save wp debug.log
         run: |
@@ -444,9 +460,9 @@ jobs:
           })();
           ENDJS
 
-          # Install Puppeteer
+          # Install Puppeteer (cached across runs)
           echo "📦 Installing Puppeteer..."
-          npm install puppeteer
+          npm install --prefer-offline puppeteer 2>/dev/null || npm install puppeteer
 
           TARGETS=(
             "http://127.0.0.1:8080/wp-admin/ dashboard"
@@ -508,7 +524,7 @@ jobs:
           path: allreports
 
       - name: Install tools
-        run: sudo apt-get update -y && sudo apt-get install -y wkhtmltopdf imagemagick
+        run: sudo apt-get update -y && sudo apt-get install -y wkhtmltopdf
 
       - name: Build combined HTML
         run: |
