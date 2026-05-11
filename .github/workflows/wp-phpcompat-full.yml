@@ -53,7 +53,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: latest
+          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -92,8 +92,7 @@ jobs:
             echo "📁 Switching src/controls to branch: ${{ github.event.inputs.controls_branch }}..." | tee -a "${REPORTS_DIR}/build/build.log"
             cd src/controls
             git fetch origin 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls git fetch failed" >> "${REPORTS_DIR}/setup/errors.log"
-            git checkout ${{ github.event.inputs.controls_branch }} 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls branch checkout failed" >> "${REPORTS_DIR}/setup/errors.log"
-            git pull origin ${{ github.event.inputs.controls_branch }} 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls git pull failed" >> "${REPORTS_DIR}/setup/errors.log"
+            git checkout -B ${{ github.event.inputs.controls_branch }} origin/${{ github.event.inputs.controls_branch }} 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls branch checkout failed" >> "${REPORTS_DIR}/setup/errors.log"
             echo "✅ src/controls switched to branch: ${{ github.event.inputs.controls_branch }}" | tee -a "${REPORTS_DIR}/build/build.log"
             cd ../..
           fi
