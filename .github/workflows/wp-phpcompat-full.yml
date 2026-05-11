@@ -273,6 +273,7 @@ jobs:
             --standard=PHPCompatibilityWP \
             --runtime-set testVersion "${{ matrix.php }}" \
             --extensions=php \
+            --ignore=*/node_modules/*,*/vendor/*,*/\.pnpm/* \
             --report=full \
             --report-file=reports/${{ matrix.php }}/phpcompat/phpcompat-${{ matrix.php }}.txt \
             wp-content/plugins/essential-blocks \
@@ -344,8 +345,8 @@ jobs:
             # Fetch the page with cookies
             curl -sSL -b cookies.txt -c cookies.txt "$url" -o "$out_html" || true
 
-            # Check if we got redirected to login page (authentication failed)
-            if grep -q "wp-login.php" "$out_html" || grep -q "<title>Log In" "$out_html" || grep -q 'name="log"' "$out_html"; then
+            # Check if we got redirected to the actual login form (not just a page containing a wp-login.php link)
+            if grep -qE '<title>\s*Log In' "$out_html" || grep -q 'name="log"' "$out_html" || grep -qE 'action="[^"]*wp-login\.php"' "$out_html"; then
               echo "⚠️ WARNING: Redirected to login page (not authenticated)" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
               echo "✅ OK: $url (login redirect, no fatal error)" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
               continue
@@ -606,8 +607,8 @@ jobs:
             status_class="pass"
 
             if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
-              errors=$(grep -c "ERROR" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
-              warnings=$(grep -c "WARNING" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+              errors=$(grep -c "| ERROR |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+              warnings=$(grep -c "| WARNING |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
 
               if [ "$errors" -gt 0 ]; then
                 status="FAIL"
@@ -743,8 +744,8 @@ jobs:
 
             # PHPCompatibility results
             if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
-              errors=$(grep -c "ERROR" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
-              warnings=$(grep -c "WARNING" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+              errors=$(grep -c "| ERROR |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
+              warnings=$(grep -c "| WARNING |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
 
               if [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ]; then
                 echo "<h4>✅ PHPCompatibility Check: <span class='status pass'>PASSED</span></h4>" >> final/combined.html
