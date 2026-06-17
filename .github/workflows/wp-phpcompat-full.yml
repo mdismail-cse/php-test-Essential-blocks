@@ -1,39 +1,63 @@
-name: WP PHP Compatibility FULL (combined report + screenshots)
+name: WP PHP Fatal Compatibility (free + pro + controls × all PHP versions)
+
+# PURPOSE
+# -------
+# Detect whether any of the three repos (Essential Blocks free, Pro, and the
+# src/controls submodule) triggers a PHP FATAL or a PHP-version incompatibility
+# on any supported PHP version inside a real WordPress install.
+#
+# Design rule: a green report MUST mean "we actually tested and found nothing".
+# If a test could not run (build/install/auth/server/scan failure) the leg is
+# reported as INCONCLUSIVE — never as PASS. A real fatal makes the whole run red.
 
 on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Essential Blocks branch to test'
+        description: 'Essential Blocks (free) branch to test'
         required: true
-        default: 'master' # <-- Change this to test any Essential Blocks branch
+        default: 'master'
       controls_branch:
         description: 'src/controls submodule branch to test'
         required: false
-        default: 'master' # <-- Change this to test any src/controls branch
+        default: 'master'
       pro_branch:
         description: 'Essential Blocks Pro branch to test'
         required: false
-        default: 'main' # <-- Change this to test any Essential Blocks Pro branch
+        default: 'main'
 
 permissions:
-  contents: write  # Changed from 'read' to 'write' for GitHub Pages deployment
-  actions: write
+  contents: write   # gh-pages deploy
   pages: write
   id-token: write
 
+# Avoid two dispatches racing on the gh-pages branch / report.
+concurrency:
+  group: phpcompat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WP_DB_NAME: wp
+  WP_DB_USER: root
+  WP_DB_PASS: root
+  WP_URL: http://127.0.0.1:8080
+  WP_ADMIN_USER: admin
+  WP_ADMIN_PASS: admin
+
 jobs:
   phpcompat:
-    name: Run compatibility per PHP version
+    name: PHP ${{ matrix.php }} fatal check
     runs-on: ubuntu-latest
-
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        php: [8.4, 8.3, 8.2, 8.1, 8.0, 7.4]
+        # Quoted so "8.0"/"8.5" are not parsed as floats (which setup-php would
+        # resolve to the latest x.x and silently test the wrong version).
+        php: ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4']
 
     steps:
-      - name: Checkout Essential Blocks plugin
+      - name: Checkout Essential Blocks (free)
         uses: actions/checkout@v4
         with:
           repository: WPDevelopers/essential-blocks
@@ -42,13 +66,44 @@ jobs:
           path: essential-blocks
           submodules: recursive
 
-      - name: Checkout Essential Blocks Pro plugin
+      - name: Checkout Essential Blocks Pro
         uses: actions/checkout@v4
         with:
           repository: WPDevelopers/essential-blocks-pro
           ref: ${{ github.event.inputs.pro_branch }}
           token: ${{ secrets.ESSENTIAL_BLOCKS_PAT }}
           path: essential-blocks-pro
+
+      - name: Initialize per-leg summary (defaults = "untested")
+        run: |
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          mkdir -p "reports/${{ matrix.php }}/setup" \
+                   "reports/${{ matrix.php }}/build" \
+                   "reports/${{ matrix.php }}/phpcompat" \
+                   "reports/${{ matrix.php }}/fatal" \
+                   "reports/${{ matrix.php }}/wpdebug" \
+                   "reports/${{ matrix.php }}/screens"
+          cat > "$SUMMARY" <<EOF
+          PHP=${{ matrix.php }}
+          CONTROLS_BRANCH=${{ github.event.inputs.controls_branch }}
+          FREE_BRANCH=${{ github.event.inputs.branch }}
+          PRO_BRANCH=${{ github.event.inputs.pro_branch }}
+          BUILD_CONTROLS=skipped
+          BUILD_FREE=unknown
+          BUILD_PRO=unknown
+          WP_INSTALL=unknown
+          PLUGINS_ACTIVE=unknown
+          SERVER=unknown
+          AUTH=unknown
+          PHPCOMPAT_RAN=no
+          PHPCOMPAT_ERRORS=0
+          PHPCOMPAT_WARNINGS=0
+          RUNTIME_PAGES=0
+          RUNTIME_FATALS=0
+          RUNTIME_INCONCLUSIVE=0
+          DEBUGLOG_FATALS=0
+          EOF
+          echo "Initialized $SUMMARY"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -62,152 +117,123 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: '**/pnpm-lock.yaml'
 
-      - name: Cache Puppeteer / npm
+      - name: Cache Puppeteer Chromium
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.npm
-            ~/.cache/puppeteer
-          key: npm-puppeteer-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          path: ~/.cache/puppeteer
+          # Key on pnpm-lock (this is a pnpm repo; there is no package-lock.json).
+          key: puppeteer-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            puppeteer-${{ runner.os }}-
 
-      - name: Build Essential Blocks plugin
+      - name: Build controls + Essential Blocks (free)
         run: |
-          # Store absolute paths
-          WORKSPACE_DIR=$(pwd)
-          REPORTS_DIR="${WORKSPACE_DIR}/reports/${{ matrix.php }}"
-
-          mkdir -p "${REPORTS_DIR}/build"
-          mkdir -p "${REPORTS_DIR}/setup"
-
-          echo "🔹 Starting Essential Blocks build process..." | tee "${REPORTS_DIR}/build/build.log"
+          SUMMARY="$(pwd)/reports/${{ matrix.php }}/summary.env"
+          BUILD_DIR="$(pwd)/reports/${{ matrix.php }}/build"
+          ERRLOG="$(pwd)/reports/${{ matrix.php }}/setup/errors.log"
 
           cd essential-blocks
+          git submodule update --init --recursive 2>&1 | tee "$BUILD_DIR/submodule.log" || echo "Submodule init failed" >> "$ERRLOG"
 
-          # Initialize and update submodules
-          echo "📁 Initializing submodules..." | tee -a "${REPORTS_DIR}/build/build.log"
-          git submodule update --init --recursive 2>&1 | tee -a "${REPORTS_DIR}/build/submodule.log" || echo "Submodule init failed" >> "${REPORTS_DIR}/setup/errors.log"
-
-          # Switch src/controls to specified branch if provided
+          # Switch controls to requested branch (one of the three tested repos).
+          controls_status=skipped
           if [ -n "${{ github.event.inputs.controls_branch }}" ] && [ -d "src/controls" ]; then
-            echo "📁 Switching src/controls to branch: ${{ github.event.inputs.controls_branch }}..." | tee -a "${REPORTS_DIR}/build/build.log"
-            cd src/controls
-            git fetch origin 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls git fetch failed" >> "${REPORTS_DIR}/setup/errors.log"
-            git checkout -B ${{ github.event.inputs.controls_branch }} origin/${{ github.event.inputs.controls_branch }} 2>&1 | tee -a "${REPORTS_DIR}/build/controls-branch.log" || echo "Controls branch checkout failed" >> "${REPORTS_DIR}/setup/errors.log"
-            echo "✅ src/controls switched to branch: ${{ github.event.inputs.controls_branch }}" | tee -a "${REPORTS_DIR}/build/build.log"
-            cd ../..
+            ( cd src/controls
+              git fetch origin
+              git checkout -B "${{ github.event.inputs.controls_branch }}" "origin/${{ github.event.inputs.controls_branch }}"
+            ) 2>&1 | tee "$BUILD_DIR/controls-branch.log" || echo "Controls branch checkout failed" >> "$ERRLOG"
           fi
 
-          # Build src/controls first
+          # Build controls.
           if [ -d "src/controls" ]; then
-            echo "📁 Building src/controls..." | tee -a "${REPORTS_DIR}/build/build.log"
-            cd src/controls
-            pnpm install 2>&1 | tee "${REPORTS_DIR}/build/controls-install.log" || echo "Controls pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
-            pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/controls-build.log" || echo "Controls build failed" >> "${REPORTS_DIR}/setup/errors.log"
-            cd ../..
-          else
-            echo "⚠️ src/controls directory not found, skipping..." | tee -a "${REPORTS_DIR}/build/build.log"
+            controls_status=ok
+            ( cd src/controls && pnpm install ) 2>&1 | tee "$BUILD_DIR/controls-install.log" || controls_status=fail
+            ( cd src/controls && pnpm run build ) 2>&1 | tee "$BUILD_DIR/controls-build.log" || controls_status=fail
           fi
 
-          # Build root project
-          echo "📁 Building root project..." | tee -a "${REPORTS_DIR}/build/build.log"
-          pnpm install 2>&1 | tee "${REPORTS_DIR}/build/root-install.log" || echo "Root pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
-          pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/root-build.log" || echo "Root build failed" >> "${REPORTS_DIR}/setup/errors.log"
+          # Build free.
+          free_status=ok
+          pnpm install 2>&1 | tee "$BUILD_DIR/free-install.log" || free_status=fail
+          pnpm run build 2>&1 | tee "$BUILD_DIR/free-build.log" || free_status=fail
 
-          cd "${WORKSPACE_DIR}"
-
-          echo "✅ Essential Blocks build completed!" | tee -a "${REPORTS_DIR}/build/build.log"
-
-          # Check if build was successful
-          if [ -f "essential-blocks/essential-blocks.php" ]; then
-            echo "✅ Plugin main file found" | tee -a "${REPORTS_DIR}/build/build.log"
-          else
-            echo "⚠️ Plugin main file not found" | tee -a "${REPORTS_DIR}/build/build.log"
-            echo "Plugin build verification failed" >> "${REPORTS_DIR}/setup/errors.log"
+          # The plugin entry file must exist or there is nothing to test.
+          if [ ! -f "essential-blocks.php" ]; then
+            free_status=fail
+            echo "Free plugin main file missing" >> "$ERRLOG"
           fi
 
-      - name: Build Essential Blocks Pro plugin
+          echo "BUILD_CONTROLS=$controls_status" >> "$SUMMARY"
+          echo "BUILD_FREE=$free_status" >> "$SUMMARY"
+          echo "controls=$controls_status free=$free_status"
+
+      - name: Build Essential Blocks Pro
         run: |
-          # Store absolute paths
-          WORKSPACE_DIR=$(pwd)
-          REPORTS_DIR="${WORKSPACE_DIR}/reports/${{ matrix.php }}"
-
-          echo "🔹 Starting Essential Blocks Pro build process..." | tee -a "${REPORTS_DIR}/build/build.log"
+          SUMMARY="$(pwd)/reports/${{ matrix.php }}/summary.env"
+          BUILD_DIR="$(pwd)/reports/${{ matrix.php }}/build"
+          ERRLOG="$(pwd)/reports/${{ matrix.php }}/setup/errors.log"
 
           cd essential-blocks-pro
+          pro_status=ok
+          pnpm install 2>&1 | tee "$BUILD_DIR/pro-install.log" || pro_status=fail
+          pnpm run build 2>&1 | tee "$BUILD_DIR/pro-build.log" || pro_status=fail
 
-          # Build Pro plugin (no src/controls submodule)
-          echo "📁 Building Essential Blocks Pro..." | tee -a "${REPORTS_DIR}/build/build.log"
-          pnpm install 2>&1 | tee "${REPORTS_DIR}/build/pro-install.log" || echo "Pro pnpm install failed" >> "${REPORTS_DIR}/setup/errors.log"
-          pnpm run build 2>&1 | tee "${REPORTS_DIR}/build/pro-build.log" || echo "Pro build failed" >> "${REPORTS_DIR}/setup/errors.log"
-
-          cd "${WORKSPACE_DIR}"
-
-          echo "✅ Essential Blocks Pro build completed!" | tee -a "${REPORTS_DIR}/build/build.log"
-
-          # Check if Pro build was successful
-          if [ -f "essential-blocks-pro/essential-blocks-pro.php" ]; then
-            echo "✅ Pro plugin main file found" | tee -a "${REPORTS_DIR}/build/build.log"
-          else
-            echo "⚠️ Pro plugin main file not found" | tee -a "${REPORTS_DIR}/build/build.log"
-            echo "Pro plugin build verification failed" >> "${REPORTS_DIR}/setup/errors.log"
+          if [ ! -f "essential-blocks-pro.php" ]; then
+            pro_status=fail
+            echo "Pro plugin main file missing" >> "$ERRLOG"
           fi
 
-      - name: Setup PHP
+          echo "BUILD_PRO=$pro_status" >> "$SUMMARY"
+          echo "pro=$pro_status"
+
+      - name: Setup PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          tools: composer, phpcs, wp-cli
-          extensions: mbstring, intl, curl, zip, xml, json
+          tools: composer, wp-cli
+          extensions: mbstring, intl, curl, zip, xml, json, mysqli
 
       - name: Install system packages
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y default-mysql-server chromium-browser imagemagick xsltproc curl wget unzip git
+          # Puppeteer ships its own Chromium; we only need MySQL + basic tooling.
+          sudo apt-get install -y default-mysql-server curl wget unzip git
 
-      - name: Install PHPCompatibilityWP & phpcs installer
+      - name: Install PHPCompatibilityWP
         run: |
           composer global config --no-plugins allow-plugins.dealerdirect/phpcodesniffer-composer-installer true
           composer global require "squizlabs/php_codesniffer:^3.0" "dealerdirect/phpcodesniffer-composer-installer:*" "phpcompatibility/phpcompatibility-wp:*" --no-interaction
-
-          # Determine composer home directory
           COMPOSER_HOME=$(composer config --global home)
-          echo "Composer home: $COMPOSER_HOME"
-
-          # Add to PATH
           echo "$COMPOSER_HOME/vendor/bin" >> $GITHUB_PATH
-
-          # Configure phpcs installed paths
-          $COMPOSER_HOME/vendor/bin/phpcs --config-set installed_paths $COMPOSER_HOME/vendor/phpcompatibility/php-compatibility,$COMPOSER_HOME/vendor/phpcompatibility/phpcompatibility-paragonie,$COMPOSER_HOME/vendor/phpcompatibility/phpcompatibility-wp
-
-          # Verify installation
+          $COMPOSER_HOME/vendor/bin/phpcs --config-set installed_paths \
+            $COMPOSER_HOME/vendor/phpcompatibility/php-compatibility,$COMPOSER_HOME/vendor/phpcompatibility/phpcompatibility-paragonie,$COMPOSER_HOME/vendor/phpcompatibility/phpcompatibility-wp
           $COMPOSER_HOME/vendor/bin/phpcs -i
 
       - name: Prepare WordPress
-        env:
-          WP_DB_NAME: wp
-          WP_DB_USER: root
-          WP_DB_PASS: root
         run: |
-          mkdir -p reports/${{ matrix.php }}/setup
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          ERRLOG="reports/${{ matrix.php }}/setup/errors.log"
 
-          # Start MySQL
-          sudo /etc/init.d/mysql start || echo "MySQL start failed" >> reports/${{ matrix.php }}/setup/errors.log
+          sudo /etc/init.d/mysql start || echo "MySQL start failed" >> "$ERRLOG"
 
-          # For PHP < 7.4, MySQL 8.0 authentication needs to be changed
-          if [[ "${{ matrix.php }}" < "7.4" ]]; then
-            echo "PHP ${{ matrix.php }} detected - configuring MySQL for compatibility..."
-            mysql -uroot -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';" 2>&1 | tee -a reports/${{ matrix.php }}/setup/mysql-config.log || true
-            mysql -uroot -proot -e "FLUSH PRIVILEGES;" 2>&1 | tee -a reports/${{ matrix.php }}/setup/mysql-config.log || true
+          # PHP < 8.0 + MySQL 8 default auth plugin (caching_sha2_password) breaks
+          # mysqli. Switch root to mysql_native_password for those versions.
+          # Numeric version compare via sort -V (the old string compare never fired).
+          PHPV="${{ matrix.php }}"
+          if [ "$(printf '%s\n8.0\n' "$PHPV" | sort -V | head -1)" = "$PHPV" ] && [ "$PHPV" != "8.0" ]; then
+            echo "PHP $PHPV: forcing mysql_native_password for root"
+            mysql -uroot -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;" \
+              2>&1 | tee reports/${{ matrix.php }}/setup/mysql-config.log || true
           fi
 
-          # Create database
-          mysql -e 'CREATE DATABASE ${{ env.WP_DB_NAME }};' -u${{ env.WP_DB_USER }} -p${{ env.WP_DB_PASS }} 2>&1 | tee -a reports/${{ matrix.php }}/setup/db-create.log || echo "Database creation failed" >> reports/${{ matrix.php }}/setup/errors.log
+          mysql -e "CREATE DATABASE ${WP_DB_NAME};" -u${WP_DB_USER} -p${WP_DB_PASS} \
+            2>&1 | tee reports/${{ matrix.php }}/setup/db-create.log || echo "Database creation failed" >> "$ERRLOG"
 
-          # Download WordPress
-          wp core download --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/wp-download.log || echo "WordPress download failed" >> reports/${{ matrix.php }}/setup/errors.log
+          wp core download --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/wp-download.log || echo "WordPress download failed" >> "$ERRLOG"
 
-          # Create wp-config.php
-          wp config create --dbname=${WP_DB_NAME} --dbuser=${WP_DB_USER} --dbpass="${WP_DB_PASS}" --dbhost=localhost --allow-root --extra-php <<PHP 2>&1 | tee reports/${{ matrix.php }}/setup/wp-config.log || echo "wp-config creation failed" >> reports/${{ matrix.php }}/setup/errors.log
+          # WP_DEBUG_DISPLAY=false so fatals do not pollute screenshots; we detect
+          # them via HTTP 500 (white screen of death) and debug.log instead.
+          wp config create --dbname=${WP_DB_NAME} --dbuser=${WP_DB_USER} --dbpass="${WP_DB_PASS}" \
+            --dbhost=127.0.0.1 --allow-root --extra-php <<'PHP' 2>&1 | tee reports/${{ matrix.php }}/setup/wp-config.log || echo "wp-config creation failed" >> "$ERRLOG"
           define( 'WP_DEBUG', true );
           define( 'WP_DEBUG_LOG', true );
           define( 'WP_DEBUG_DISPLAY', false );
@@ -215,297 +241,227 @@ jobs:
 
       - name: Install WordPress
         run: |
-          wp core install --url="http://127.0.0.1:8080" --title="WP Test" --admin_user="admin" --admin_password="admin" --admin_email="admin@example.com" --skip-email --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/wp-install.log || echo "WordPress installation failed" >> reports/${{ matrix.php }}/setup/errors.log
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          status=ok
+          wp core install --url="${WP_URL}" --title="WP Test" \
+            --admin_user="${WP_ADMIN_USER}" --admin_password="${WP_ADMIN_PASS}" \
+            --admin_email="admin@example.com" --skip-email --allow-root \
+            2>&1 | tee reports/${{ matrix.php }}/setup/wp-install.log || status=fail
+          # Confirm WP actually responds to CLI (catches a half-broken install).
+          wp option get siteurl --allow-root >/dev/null 2>&1 || status=fail
+          echo "WP_INSTALL=$status" >> "$SUMMARY"
 
-      - name: Copy plugins into WP plugins dir
+      - name: Copy plugins into WP
         run: |
-          # Copy Essential Blocks (free)
-          mkdir -p wp-content/plugins/essential-blocks
-          cp -R essential-blocks/* wp-content/plugins/essential-blocks/ 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-copy.log || echo "Plugin copy failed" >> reports/${{ matrix.php }}/setup/errors.log
-          
-          # Copy Essential Blocks Pro
-          mkdir -p wp-content/plugins/essential-blocks-pro
-          cp -R essential-blocks-pro/* wp-content/plugins/essential-blocks-pro/ 2>&1 | tee reports/${{ matrix.php }}/setup/pro-plugin-copy.log || echo "Pro plugin copy failed" >> reports/${{ matrix.php }}/setup/errors.log
+          # rsync excludes node_modules/.git (large, irrelevant) but KEEPS vendor
+          # (composer autoload is required at runtime — excluding it would fatal).
+          rsync -a --exclude node_modules --exclude .git \
+            essential-blocks/ wp-content/plugins/essential-blocks/ \
+            2>&1 | tee reports/${{ matrix.php }}/setup/plugin-copy.log || echo "Plugin copy failed" >> reports/${{ matrix.php }}/setup/errors.log
+          rsync -a --exclude node_modules --exclude .git \
+            essential-blocks-pro/ wp-content/plugins/essential-blocks-pro/ \
+            2>&1 | tee reports/${{ matrix.php }}/setup/pro-plugin-copy.log || echo "Pro plugin copy failed" >> reports/${{ matrix.php }}/setup/errors.log
 
-      - name: Auto-update plugins and activate
+      - name: Activate plugins
         run: |
-          wp plugin update --all --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-update.log || echo "Plugin update failed" >> reports/${{ matrix.php }}/setup/errors.log
-          wp plugin activate essential-blocks --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-activate.log || echo "Plugin activation failed" >> reports/${{ matrix.php }}/setup/errors.log
-          wp plugin activate essential-blocks-pro --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/pro-plugin-activate.log || echo "Pro plugin activation failed" >> reports/${{ matrix.php }}/setup/errors.log
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          af=ok; ap=ok
+          wp plugin activate essential-blocks --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/plugin-activate.log || af=fail
+          wp plugin activate essential-blocks-pro --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/pro-plugin-activate.log || ap=fail
+          if [ "$af" = "fail" ]; then state=fail; elif [ "$ap" = "fail" ]; then state=partial; else state=ok; fi
+          echo "PLUGINS_ACTIVE=$state" >> "$SUMMARY"
+          echo "free_active=$af pro_active=$ap -> $state"
 
-      - name: Create Application Password for admin user
+      - name: Start WP built-in server (multi-worker)
         run: |
-          # Create application password for admin user
-          APP_PASSWORD=$(wp user application-password create admin "GitHub Actions Screenshot" --porcelain --allow-root 2>&1 | tee reports/${{ matrix.php }}/setup/app-password.log || echo "")
-          if [ -z "$APP_PASSWORD" ]; then
-            echo "Application password creation failed" >> reports/${{ matrix.php }}/setup/errors.log
-            echo "APP_PASSWORD=admin" >> $GITHUB_ENV
-          else
-            echo "APP_PASSWORD=$APP_PASSWORD" >> $GITHUB_ENV
-            echo "✅ Application password created for admin user"
-            echo "Password (first 10 chars): ${APP_PASSWORD:0:10}..."
-          fi
-
-      - name: Start WP built-in server
-        run: |
-          nohup wp server --host=127.0.0.1 --port=8080 --path=. --allow-root > wpserver.log 2>&1 &
-
-          # Wait up to 30s for server to become ready
-          for i in {1..15}; do
-            if curl -s http://127.0.0.1:8080 > /dev/null; then
-              echo "✅ WordPress server ready (attempt $i)"
-              break
-            fi
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          # PHP_CLI_SERVER_WORKERS lets the built-in server handle the concurrent
+          # sub-requests an admin page makes (admin-ajax/REST/assets). Without it
+          # the single-threaded server deadlocks and pages time out blank.
+          PHP_CLI_SERVER_WORKERS=8 nohup wp server --host=127.0.0.1 --port=8080 --path=. --allow-root > wpserver.log 2>&1 &
+          status=fail
+          for i in {1..20}; do
+            if curl -s -o /dev/null "${WP_URL}"; then status=ok; echo "Server ready (attempt $i)"; break; fi
             sleep 2
           done
-
-          if ! curl -s http://127.0.0.1:8080 > /dev/null; then
+          if [ "$status" = "fail" ]; then
             echo "WordPress server failed to start" >> reports/${{ matrix.php }}/setup/errors.log
-            cat wpserver.log >> reports/${{ matrix.php }}/setup/errors.log
+            cat wpserver.log >> reports/${{ matrix.php }}/setup/errors.log || true
           fi
+          echo "SERVER=$status" >> "$SUMMARY"
 
-      - name: Create report folders
-        run: mkdir -p reports/${{ matrix.php }}/phpcompat reports/${{ matrix.php }}/fatal reports/${{ matrix.php }}/wpdebug reports/${{ matrix.php }}/screens
-
-      - name: Run PHPCompatibility scan
+      - name: PHPCompatibility scan (static, all three repos)
         run: |
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          OUT="reports/${{ matrix.php }}/phpcompat"
+          # Single run, two reports. Non-zero exit just means violations found.
           phpcs \
             --standard=PHPCompatibilityWP \
             --runtime-set testVersion "${{ matrix.php }}" \
             --extensions=php \
-            --ignore=*/node_modules/*,*/vendor/*,*/\.pnpm/* \
-            --report=full \
-            --report-file=reports/${{ matrix.php }}/phpcompat/phpcompat-${{ matrix.php }}.txt \
+            --ignore='*/node_modules/*,*/.pnpm/*' \
+            --report-full="$OUT/phpcompat-${{ matrix.php }}.txt" \
+            --report-json="$OUT/phpcompat-${{ matrix.php }}.json" \
             wp-content/plugins/essential-blocks \
             wp-content/plugins/essential-blocks-pro || true
 
-      - name: Save wp debug.log
-        run: |
-          if [ -f wp-content/debug.log ]; then
-            cp wp-content/debug.log reports/${{ matrix.php }}/wpdebug/debug-${{ matrix.php }}.log || true
-          fi
-
-      - name: Login to WordPress admin (for HTML checks)
-        run: |
-          # Get login page to initialize cookies
-          curl -sSL -c cookies.txt "http://127.0.0.1:8080/wp-login.php" -o /dev/null
-
-          # Login with admin credentials using application password
-          curl -sSL -b cookies.txt -c cookies.txt \
-            -d "log=admin" \
-            -d "pwd=$APP_PASSWORD" \
-            -d "wp-submit=Log+In" \
-            -d "redirect_to=http://127.0.0.1:8080/wp-admin/" \
-            -d "testcookie=1" \
-            "http://127.0.0.1:8080/wp-login.php" -o /dev/null
-
-          # Verify login by checking admin page
-          if curl -sSL -b cookies.txt "http://127.0.0.1:8080/wp-admin/" | grep -q "Dashboard"; then
-            echo "✅ Successfully logged in to WordPress admin with application password"
+          JSON="$OUT/phpcompat-${{ matrix.php }}.json"
+          if [ -f "$JSON" ]; then
+            # Parse authoritative totals with PHP (no fragile grep -c line counting).
+            # Note the trailing "\n" in each echo: without it `read` hits EOF
+            # before a newline, returns non-zero, and `set -e` would abort here.
+            # The `|| true` is belt-and-suspenders (read still populates the vars).
+            read RAN ERRS WARN < <(php -r '
+              $f=$argv[1];
+              $j=json_decode(@file_get_contents($f),true);
+              if(!is_array($j)||!isset($j["totals"])){echo "no 0 0\n";exit;}
+              echo "yes ".(int)$j["totals"]["errors"]." ".(int)$j["totals"]["warnings"]."\n";
+            ' "$JSON") || true
           else
-            echo "⚠️ Login may have failed, trying with regular password..."
-            # Fallback to regular password
-            curl -sSL -b cookies.txt -c cookies.txt \
-              -d "log=admin" \
-              -d "pwd=admin" \
-              -d "wp-submit=Log+In" \
-              -d "redirect_to=http://127.0.0.1:8080/wp-admin/" \
-              -d "testcookie=1" \
-              "http://127.0.0.1:8080/wp-login.php" -o /dev/null
-
-            if curl -sSL -b cookies.txt "http://127.0.0.1:8080/wp-admin/" | grep -q "Dashboard"; then
-              echo "✅ Logged in with regular password"
-            else
-              echo "⚠️ Login failed, but continuing..."
-            fi
+            RAN=no; ERRS=0; WARN=0
           fi
+          echo "PHPCOMPAT_RAN=$RAN" >> "$SUMMARY"
+          echo "PHPCOMPAT_ERRORS=$ERRS" >> "$SUMMARY"
+          echo "PHPCOMPAT_WARNINGS=$WARN" >> "$SUMMARY"
+          echo "phpcompat ran=$RAN errors=$ERRS warnings=$WARN"
 
-          # Wait a moment for session to stabilize
-          sleep 2
-
-      - name: Check admin/editor pages for fatal errors + save HTML
+      - name: Runtime fatal check + screenshots (single Puppeteer auth path)
         run: |
-          TARGETS=(
-            "http://127.0.0.1:8080/wp-admin/admin.php admin"
-            "http://127.0.0.1:8080/wp-admin/admin.php?page=eb-quick-setup eb_quick_setup"
-            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
-            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
-          )
-
-          echo "=== Starting Admin Pages Check ===" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-
-          for t in "${TARGETS[@]}"; do
-            url=$(echo "$t" | awk '{print $1}')
-            name=$(echo "$t" | awk '{print $2}')
-            out_html="reports/${{ matrix.php }}/fatal/${name}.html"
-
-            echo "" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-            echo "Checking: $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-
-            # Fetch the page with cookies
-            curl -sSL -b cookies.txt -c cookies.txt "$url" -o "$out_html" || true
-
-            # Check if we got redirected to the actual login form (not just a page containing a wp-login.php link)
-            if grep -qE '<title>\s*Log In' "$out_html" || grep -q 'name="log"' "$out_html" || grep -qE 'action="[^"]*wp-login\.php"' "$out_html"; then
-              echo "⚠️ WARNING: Redirected to login page (not authenticated)" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-              echo "✅ OK: $url (login redirect, no fatal error)" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-              continue
-            fi
-
-            # Check for actual PHP fatal errors (not JavaScript code containing these words)
-            # Look for PHP error patterns in HTML output
-            if grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" >/dev/null 2>&1; then
-              echo "[FATAL] $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-              echo "Found PHP errors:" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-              grep -E "<b>Fatal error</b>:|<b>Parse error</b>:|<b>Warning</b>:.*in <b>/|Fatal error:|Parse error:|Uncaught Error:|Uncaught Exception:" "$out_html" | head -10 >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-              echo "---" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-            else
-              echo "✅ OK: $url" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-            fi
-          done
-
-          echo "" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-          echo "=== Admin Pages Check Complete ===" >> reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-
-          # Show the log for debugging
-          echo ""
-          echo "========================================="
-          echo "Fatal Error Check Results:"
-          echo "========================================="
-          cat reports/${{ matrix.php }}/fatal/fatal-${{ matrix.php }}.log
-          echo "========================================="
-
-      - name: Take viewport screenshots (1920x1080) JPEG
-        run: |
-          SCREEN_DIR=reports/${{ matrix.php }}/screens
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          SCREEN_DIR="reports/${{ matrix.php }}/screens"
+          RUNLOG="reports/${{ matrix.php }}/fatal/runtime-${{ matrix.php }}.log"
           mkdir -p "$SCREEN_DIR"
+          : > "$RUNLOG"
 
-          # Create a Node.js script that logs in with regular password (not app password)
-          cat > screenshot.js <<'ENDJS'
+          # One auth mechanism only: Puppeteer logs in with the real password,
+          # then for every target reports a verdict: OK / FATAL / INCONCLUSIVE.
+          cat > runtime.js <<'ENDJS'
           const puppeteer = require('puppeteer');
-
           (async () => {
-            const args = process.argv.slice(2);
-            const targetUrl = args[0];
-            const outputFile = args[1];
-
-            console.log('🚀 Launching browser...');
+            const [targetUrl, outputFile, name] = process.argv.slice(2);
+            const URL = process.env.WP_URL;
+            const USER = process.env.WP_ADMIN_USER;
+            const PASS = process.env.WP_ADMIN_PASS;
             const browser = await puppeteer.launch({
               headless: true,
-              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
             });
-
-            const page = await browser.newPage();
-            await page.setViewport({ width: 1920, height: 1080 });
-
-            console.log('🔐 Logging in to WordPress...');
-
-            // Go to login page
-            await page.goto('http://127.0.0.1:8080/wp-login.php', { waitUntil: 'networkidle2', timeout: 30000 });
-
-            // Wait for login form to be visible
-            await page.waitForSelector('#user_login', { visible: true, timeout: 5000 });
-            await page.waitForSelector('#user_pass', { visible: true, timeout: 5000 });
-
-            // Fill in login form with regular admin password
-            await page.type('#user_login', 'admin', { delay: 50 });
-            await page.type('#user_pass', 'admin', { delay: 50 });
-
-            console.log('📝 Submitting login form...');
-
-            // Click login button and wait for navigation
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
-              page.click('#wp-submit')
-            ]);
-
-            // Check if login was successful
-            const afterLoginUrl = page.url();
-            console.log('After login URL:', afterLoginUrl);
-
-            if (afterLoginUrl.includes('wp-login.php')) {
-              console.log('❌ Login failed - still on login page');
-              // Try to get error message
-              const errorMsg = await page.$eval('.message', el => el.textContent).catch(() => 'No error message found');
-              console.log('Error:', errorMsg);
-            } else {
-              console.log('✅ Login successful - redirected to:', afterLoginUrl);
+            try {
+              const page = await browser.newPage();
+              await page.setViewport({ width: 1920, height: 1080 });
+              await page.goto(URL + '/wp-login.php', { waitUntil: 'networkidle2', timeout: 30000 });
+              await page.waitForSelector('#user_login', { timeout: 10000 });
+              await page.type('#user_login', USER);
+              await page.type('#user_pass', PASS);
+              await Promise.all([
+                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {}),
+                page.click('#wp-submit'),
+              ]);
+              if (page.url().includes('wp-login.php')) {
+                console.log('VERDICT|' + name + '|LOGIN_FAILED|auth');
+                await page.screenshot({ path: outputFile, type: 'jpeg', quality: 85 }).catch(() => {});
+                await browser.close();
+                process.exit(3);
+              }
+              const resp = await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+              const httpStatus = resp ? resp.status() : 0;
+              await new Promise(r => setTimeout(r, 2000));
+              const body = await page.content();
+              await page.screenshot({ path: outputFile, type: 'jpeg', quality: 85 }).catch(() => {});
+              let verdict = 'OK';
+              if (page.url().includes('wp-login.php')) verdict = 'INCONCLUSIVE';      // lost session
+              else if (httpStatus >= 500) verdict = 'FATAL';                          // WSOD
+              else if (/<b>\s*Fatal error\s*<\/b>|Fatal error:|Parse error:|Uncaught (Error|Exception)/.test(body)) verdict = 'FATAL';
+              console.log('VERDICT|' + name + '|' + verdict + '|http' + httpStatus);
+              await browser.close();
+              process.exit(verdict === 'FATAL' ? 1 : 0);
+            } catch (e) {
+              console.log('VERDICT|' + name + '|INCONCLUSIVE|' + String(e.message || 'error').slice(0, 80).replace(/\|/g, ' '));
+              try { await browser.close(); } catch (_) {}
+              process.exit(4);
             }
-
-            // Wait a bit for session to stabilize
-            await new Promise(resolve => setTimeout(resolve, 2000));
-
-            // Navigate to target URL
-            console.log('📸 Navigating to:', targetUrl);
-            await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-
-            // Wait for page to fully load
-            await new Promise(resolve => setTimeout(resolve, 3000));
-
-            // Check final URL
-            const finalUrl = page.url();
-            console.log('Final URL:', finalUrl);
-
-            if (finalUrl.includes('wp-login.php')) {
-              console.log('⚠️ Redirected back to login page - authentication failed');
-            } else {
-              console.log('✅ Successfully loaded target page');
-            }
-
-            // Take screenshot regardless
-            await page.screenshot({ path: outputFile, fullPage: false });
-            console.log('✅ Screenshot saved to:', outputFile);
-
-            await browser.close();
           })();
           ENDJS
 
-          # Install Puppeteer (cached across runs)
-          echo "📦 Installing Puppeteer..."
-          npm install --prefer-offline puppeteer 2>/dev/null || npm install puppeteer
+          puppeteer_ok=yes
+          npm install --prefer-offline puppeteer 2>&1 | tail -5 || puppeteer_ok=no
+          if [ "$puppeteer_ok" = "no" ]; then npm install puppeteer 2>&1 | tail -5 || puppeteer_ok=no; fi
 
+          # Frontend + admin + editor surfaces, free-only and free+pro.
           TARGETS=(
-            "http://127.0.0.1:8080/wp-admin/ dashboard"
-            "http://127.0.0.1:8080/wp-admin/plugins.php plugins"
-            "http://127.0.0.1:8080/wp-admin/admin.php?page=essential-blocks&tab=options admin"
-            "http://127.0.0.1:8080/wp-admin/admin.php?page=eb-quick-setup eb_quick_setup"
-            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
-            "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
+            "${WP_URL}/ frontend_home"
+            "${WP_URL}/wp-admin/ dashboard"
+            "${WP_URL}/wp-admin/plugins.php plugins"
+            "${WP_URL}/wp-admin/admin.php?page=essential-blocks&tab=options eb_options"
+            "${WP_URL}/wp-admin/admin.php?page=eb-quick-setup eb_quick_setup"
+            "${WP_URL}/wp-admin/post-new.php?post_type=post editor_post"
+            "${WP_URL}/wp-admin/post-new.php?post_type=page editor_page"
           )
 
-          for t in "${TARGETS[@]}"; do
-            url=$(echo "$t" | awk '{print $1}')
-            name=$(echo "$t" | awk '{print $2}')
-            pngfile="$SCREEN_DIR/${{ matrix.php }}_${name}.png"
-            jpgfile="$SCREEN_DIR/${{ matrix.php }}_${name}.jpg"
+          pages=0; fatals=0; inconclusive=0; auth=ok
+          if [ "$puppeteer_ok" = "no" ]; then
+            echo "Puppeteer install failed; runtime check could not run" | tee -a "$RUNLOG"
+            auth=fail
+          else
+            for t in "${TARGETS[@]}"; do
+              url=$(echo "$t" | awk '{print $1}')
+              name=$(echo "$t" | awk '{print $2}')
+              jpg="$SCREEN_DIR/${{ matrix.php }}_${name}.jpg"
 
-            echo ""
-            echo "========================================="
-            echo "📸 Taking screenshot of: $name"
-            echo "========================================="
+              # eb_quick_setup is a free-only screen: deactivate Pro around it.
+              if [ "$name" = "eb_quick_setup" ]; then
+                wp plugin deactivate essential-blocks-pro --allow-root >/dev/null 2>&1 || true
+              fi
 
-            if [ "$name" = "eb_quick_setup" ]; then
-              echo "🔧 Deactivating Essential Blocks Pro before quick setup screenshot..." | tee -a reports/${{ matrix.php }}/setup/pro-screenshot.log
-              wp plugin deactivate essential-blocks-pro --allow-root 2>&1 | tee -a reports/${{ matrix.php }}/setup/pro-deactivate.log || true
-            fi
+              out=$(WP_URL="$WP_URL" WP_ADMIN_USER="$WP_ADMIN_USER" WP_ADMIN_PASS="$WP_ADMIN_PASS" \
+                    node runtime.js "$url" "$jpg" "$name" 2>&1) || true
+              echo "$out" | tee -a "$RUNLOG"
 
-            # Take screenshot with Puppeteer using regular password
-            node screenshot.js "$url" "$pngfile" || echo "❌ Screenshot failed for $url"
+              if [ "$name" = "eb_quick_setup" ]; then
+                wp plugin activate essential-blocks-pro --allow-root >/dev/null 2>&1 || true
+              fi
 
-            if [ "$name" = "eb_quick_setup" ]; then
-              echo "🔧 Reactivating Essential Blocks Pro after quick setup screenshot..." | tee -a reports/${{ matrix.php }}/setup/pro-screenshot.log
-              wp plugin activate essential-blocks-pro --allow-root 2>&1 | tee -a reports/${{ matrix.php }}/setup/pro-reactivate.log || true
-            fi
+              # `|| true`: if node crashed without printing a VERDICT line, grep
+              # fails and (with pipefail) `var=$(...)` would trip `set -e`. Empty
+              # verdict falls through to the *) case below = INCONCLUSIVE.
+              verdict=$(echo "$out" | grep '^VERDICT|' | tail -1 | cut -d'|' -f3 || true)
+              pages=$((pages + 1))
+              case "$verdict" in
+                FATAL)        fatals=$((fatals + 1)) ;;
+                OK)           : ;;
+                LOGIN_FAILED) auth=fail; inconclusive=$((inconclusive + 1)) ;;
+                *)            inconclusive=$((inconclusive + 1)) ;;
+              esac
+            done
+          fi
 
-            # Convert to JPEG
-            if [ -f "$pngfile" ]; then
-              convert "$pngfile" -quality 85 "$jpgfile" || cp "$pngfile" "$jpgfile"
-              rm -f "$pngfile"
-              echo "✅ Saved: $jpgfile"
-            fi
-          done
+          echo "AUTH=$auth" >> "$SUMMARY"
+          echo "RUNTIME_PAGES=$pages" >> "$SUMMARY"
+          echo "RUNTIME_FATALS=$fatals" >> "$SUMMARY"
+          echo "RUNTIME_INCONCLUSIVE=$inconclusive" >> "$SUMMARY"
+          echo "runtime: pages=$pages fatals=$fatals inconclusive=$inconclusive auth=$auth"
+
+      - name: Save & scan WP debug.log
+        run: |
+          SUMMARY="reports/${{ matrix.php }}/summary.env"
+          DEST="reports/${{ matrix.php }}/wpdebug/debug-${{ matrix.php }}.log"
+          fatals=0
+          if [ -f wp-content/debug.log ]; then
+            cp wp-content/debug.log "$DEST" || true
+            fatals=$(grep -c "PHP Fatal error" "$DEST" 2>/dev/null || true)
+            fatals=${fatals:-0}
+          fi
+          echo "DEBUGLOG_FATALS=$fatals" >> "$SUMMARY"
+          echo "debug.log fatals=$fatals"
+
+      - name: Show leg summary
+        if: always()
+        run: |
+          echo "===== reports/${{ matrix.php }}/summary.env ====="
+          cat "reports/${{ matrix.php }}/summary.env" || echo "(no summary written)"
 
       - name: Upload per-PHP artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: perphp-reports-${{ matrix.php }}
@@ -513,9 +469,10 @@ jobs:
           retention-days: 7
 
   combine:
-    name: Combine all PHP reports into single HTML + PDF (with screenshots)
+    name: Combine reports + compute verdict
     runs-on: ubuntu-latest
     needs: phpcompat
+    if: always()   # still produce a report even if a matrix leg failed hard
 
     steps:
       - name: Download all artifacts
@@ -523,362 +480,162 @@ jobs:
         with:
           path: allreports
 
-      - name: Install tools
-        run: sudo apt-get update -y && sudo apt-get install -y wkhtmltopdf
+      - name: Setup Node.js (for PDF)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: Build combined HTML
+      - name: Build combined HTML + compute trustworthy verdict
         run: |
           mkdir -p final
-
-          # Get current date/time
           REPORT_DATE=$(date -u '+%B %d, %Y at %H:%M:%S UTC')
-          WORKFLOW_RUN="${{ github.run_number }}"
+
+          # get KEY from a summary.env (last value wins; defaults are written first)
+          # `|| true` so a missing/empty key never trips `set -e` in `var=$(get ...)`.
+          get() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true ; }
+          num() { v=$(get "$1" "$2"); echo "${v:-0}" | tr -dc '0-9'; }
 
           cat > final/combined.html <<'HTML'
-          <!doctype html>
-          <html>
-          <head>
-          <meta charset="utf-8"/>
-          <title>Essential Blocks - PHP Compatibility Report</title>
+          <!doctype html><html><head><meta charset="utf-8"/>
+          <title>Essential Blocks — PHP Fatal Compatibility</title>
           <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; line-height:1.6; margin:0; padding:20px; color:#333; background:#f5f5f5; }
-          .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-          h1 { color:#1a1a1a; border-bottom: 3px solid #0073aa; padding-bottom: 10px; }
-          h2 { color:#0073aa; margin-top: 30px; }
-          h3 { color:#333; background: #f0f0f0; padding: 10px; border-left: 4px solid #0073aa; }
-          .summary { background: #e7f5fe; border-left: 4px solid #0073aa; padding: 15px; margin: 20px 0; }
-          .status { display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; font-size: 0.9em; }
-          .pass { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-          .fail { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-          .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
-          .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-          pre { background:#f8f9fa; padding:12px; border-radius:4px; overflow:auto; border: 1px solid #dee2e6; font-size: 0.85em; }
-          .screenshot { margin: 15px 0; border: 2px solid #dee2e6; padding:8px; border-radius: 4px; background: #fff; }
-          .screenshot img { border-radius: 4px; }
-          .meta { font-size:0.9em; color:#666; margin: 10px 0; }
-          .report-header { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; border-left: 4px solid #0073aa; }
-          hr { border:none; border-top:2px solid #e9ecef; margin:40px 0; }
-          table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-          th, td { padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }
-          th { background: #f8f9fa; font-weight: 600; color: #495057; }
-          tr:hover { background: #f8f9fa; }
-          .error-count { font-size: 1.2em; font-weight: bold; }
-          .section { margin: 30px 0; }
-          </style>
-          </head>
-          <body>
-          <div class="container">
-          <h1>🔍 Essential Blocks — PHP Compatibility Report</h1>
+          body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;line-height:1.6;margin:0;padding:20px;color:#333;background:#f5f5f5;}
+          .container{max-width:1200px;margin:0 auto;background:#fff;padding:30px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1);}
+          h1{color:#1a1a1a;border-bottom:3px solid #0073aa;padding-bottom:10px;}
+          h2{color:#0073aa;margin-top:30px;} h3{color:#333;background:#f0f0f0;padding:10px;border-left:4px solid #0073aa;}
+          .status{display:inline-block;padding:4px 12px;border-radius:4px;font-weight:bold;font-size:.9em;}
+          .pass{background:#d4edda;color:#155724;border:1px solid #c3e6cb;}
+          .fail{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;}
+          .inconclusive{background:#fff3cd;color:#856404;border:1px solid #ffeaa7;}
+          pre{background:#f8f9fa;padding:12px;border-radius:4px;overflow:auto;border:1px solid #dee2e6;font-size:.85em;}
+          .screenshot{margin:15px 0;border:2px solid #dee2e6;padding:8px;border-radius:4px;}
+          .meta{font-size:.9em;color:#666;} table{width:100%;border-collapse:collapse;margin:20px 0;}
+          th,td{padding:12px;text-align:left;border-bottom:1px solid #dee2e6;} th{background:#f8f9fa;font-weight:600;}
+          .num{font-weight:bold;} hr{border:none;border-top:2px solid #e9ecef;margin:40px 0;}
+          .legend{font-size:.85em;color:#555;background:#f8f9fa;padding:10px 15px;border-radius:4px;border-left:4px solid #0073aa;}
+          </style></head><body><div class="container">
+          <h1>🔍 Essential Blocks — PHP Fatal Compatibility</h1>
           HTML
 
-          # Add report metadata
           cat >> final/combined.html <<EOF
-          <div class="report-header">
-            <p class="meta"><strong>📅 Generated:</strong> ${REPORT_DATE}</p>
-            <p class="meta"><strong>🔢 Workflow Run:</strong> #${WORKFLOW_RUN}</p>
-            <p class="meta"><strong>🔗 Repository:</strong> ${{ github.repository }}</p>
-            <p class="meta"><strong>🌿 Branch:</strong> ${{ github.event.inputs.branch || 'master' }}</p>
-          </div>
+          <p class="meta"><strong>📅 Generated:</strong> ${REPORT_DATE} &nbsp;|&nbsp; <strong>🔢 Run:</strong> #${{ github.run_number }}</p>
+          <p class="meta"><strong>Branches</strong> — free: <code>${{ github.event.inputs.branch }}</code>, pro: <code>${{ github.event.inputs.pro_branch }}</code>, controls: <code>${{ github.event.inputs.controls_branch }}</code></p>
+          <div class="legend"><strong>Verdict meaning:</strong>
+          <span class="status pass">PASS</span> tested, no fatal/incompat found &nbsp;
+          <span class="status fail">FAIL</span> a real PHP fatal or version incompatibility was found &nbsp;
+          <span class="status inconclusive">INCONCLUSIVE</span> could not be reliably tested (build/install/auth/server/scan gap) — do not treat as pass.</div>
+          <h2>📊 Summary</h2>
+          <table><tr><th>PHP</th><th>Verdict</th><th>PHPCompat errors</th><th>Runtime fatals</th><th>debug.log fatals</th><th>Why</th></tr>
           EOF
 
-          # Build summary table
-          echo '<div class="summary">' >> final/combined.html
-          echo '<h2>📊 Summary</h2>' >> final/combined.html
-          echo '<table>' >> final/combined.html
-          echo '<tr><th>PHP Version</th><th>Setup</th><th>Compatibility Status</th><th>Errors</th><th>Warnings</th><th>Fatal Errors</th></tr>' >> final/combined.html
-
+          ANY_FAIL=0
+          LEG_COUNT=0
           for dir in allreports/*; do
             [ -d "$dir" ] || continue
-            dirname=$(basename "$dir")
-            ver=$(echo "$dirname" | sed 's/perphp-reports-//')
+            ver=$(basename "$dir" | sed 's/perphp-reports-//')
+            SUM="$dir/summary.env"
+            LEG_COUNT=$((LEG_COUNT + 1))
 
-            # Check for setup errors
-            setup_status="✅"
-            setup_class="pass"
-            if [ -f "$dir/setup/errors.log" ] && [ -s "$dir/setup/errors.log" ]; then
-              setup_status="⚠️"
-              setup_class="warning"
-            fi
+            if [ ! -f "$SUM" ]; then
+              verdict="INCONCLUSIVE"; vclass="inconclusive"; why="leg did not report (died before summary)"
+              pe=0; rf=0; df=0
+            else
+              pe=$(num "$SUM" PHPCOMPAT_ERRORS); rf=$(num "$SUM" RUNTIME_FATALS); df=$(num "$SUM" DEBUGLOG_FATALS)
+              wp_install=$(get "$SUM" WP_INSTALL); server=$(get "$SUM" SERVER); auth=$(get "$SUM" AUTH)
+              ran=$(get "$SUM" PHPCOMPAT_RAN); active=$(get "$SUM" PLUGINS_ACTIVE); rinc=$(num "$SUM" RUNTIME_INCONCLUSIVE)
 
-            # Parse PHPCompatibility results
-            errors=0
-            warnings=0
-            status="PASS"
-            status_class="pass"
-
-            if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
-              errors=$(grep -c "| ERROR |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
-              warnings=$(grep -c "| WARNING |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
-
-              if [ "$errors" -gt 0 ]; then
-                status="FAIL"
-                status_class="fail"
-              elif [ "$warnings" -gt 0 ]; then
-                status="WARNING"
-                status_class="warning"
+              if [ "${pe:-0}" -gt 0 ] || [ "${rf:-0}" -gt 0 ] || [ "${df:-0}" -gt 0 ]; then
+                verdict="FAIL"; vclass="fail"
+                why="$pe phpcompat err, $rf runtime fatal, $df debug.log fatal"
+              elif [ "$wp_install" != "ok" ] || [ "$server" != "ok" ] || [ "$auth" != "ok" ] || [ "$ran" != "yes" ] || [ "$active" = "fail" ] || [ "${rinc:-0}" -gt 0 ]; then
+                verdict="INCONCLUSIVE"; vclass="inconclusive"
+                why="install=$wp_install server=$server auth=$auth scan=$ran active=$active runtime_inconclusive=$rinc"
+              else
+                verdict="PASS"; vclass="pass"; why="tested, clean"
               fi
             fi
+            [ "$verdict" = "FAIL" ] && ANY_FAIL=1
 
-            # Check for fatal errors
-            fatal_count=0
-            if [ -f "$dir/fatal/fatal-${ver}.log" ]; then
-              fatal_count=$(grep -c "\[FATAL\]" "$dir/fatal/fatal-${ver}.log" 2>/dev/null || echo "0")
-              if [ "$fatal_count" -gt 0 ]; then
-                status="FAIL"
-                status_class="fail"
-              fi
-            fi
-
-            echo "<tr>" >> final/combined.html
-            echo "<td><strong>PHP ${ver}</strong></td>" >> final/combined.html
-            echo "<td><span class='status ${setup_class}'>${setup_status}</span></td>" >> final/combined.html
-            echo "<td><span class='status ${status_class}'>${status}</span></td>" >> final/combined.html
-            echo "<td class='error-count' style='color: #dc3545;'>${errors}</td>" >> final/combined.html
-            echo "<td class='error-count' style='color: #ffc107;'>${warnings}</td>" >> final/combined.html
-            echo "<td class='error-count' style='color: #dc3545;'>${fatal_count}</td>" >> final/combined.html
-            echo "</tr>" >> final/combined.html
+            echo "<tr><td><strong>PHP ${ver}</strong></td><td><span class='status ${vclass}'>${verdict}</span></td><td class='num'>${pe}</td><td class='num'>${rf}</td><td class='num'>${df}</td><td>${why}</td></tr>" >> final/combined.html
           done
+          echo "</table>" >> final/combined.html
+          printf 'ANY_FAIL=%s\nLEG_COUNT=%s\n' "$ANY_FAIL" "$LEG_COUNT" > final/verdict.flag
 
-          echo '</table>' >> final/combined.html
-          echo '</div>' >> final/combined.html
-
-          # Detailed results per PHP version
-          echo "<h2>📋 Detailed Results</h2>" >> final/combined.html
-
+          # ---- Detailed sections ----
+          echo "<h2>📋 Details</h2>" >> final/combined.html
           for dir in allreports/*; do
             [ -d "$dir" ] || continue
-            dirname=$(basename "$dir")
-            ver=$(echo "$dirname" | sed 's/perphp-reports-//')
-
-            # Initialize individual error report for this PHP version
-            has_errors=false
-            error_report="final/php-${ver}-errors.html"
-
-            # Start individual error report
-            cat > "$error_report" <<ERRHTML
-          <!doctype html>
-          <html>
-          <head>
-          <meta charset="utf-8"/>
-          <title>PHP ${ver} - Error Report</title>
-          <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; line-height:1.6; margin:0; padding:20px; color:#333; background:#f5f5f5; }
-          .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-          h1 { color:#dc3545; border-bottom: 3px solid #dc3545; padding-bottom: 10px; }
-          h2 { color:#721c24; margin-top: 30px; }
-          h3 { color:#333; background: #f8d7da; padding: 10px; border-left: 4px solid #dc3545; }
-          pre { background:#f8f9fa; padding:12px; border-radius:4px; overflow:auto; border: 1px solid #dee2e6; font-size: 0.85em; }
-          .error { background: #f8d7da; border-left: 4px solid #dc3545; padding: 15px; margin: 20px 0; }
-          .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }
-          .meta { font-size:0.9em; color:#666; }
-          </style>
-          </head>
-          <body>
-          <div class="container">
-          <h1>🔴 PHP ${ver} - Error Report</h1>
-          <p class="meta">📅 Generated on $(date -u '+%Y-%m-%d %H:%M:%S UTC')</p>
-          ERRHTML
-
-            echo "<div class='section'>" >> final/combined.html
+            ver=$(basename "$dir" | sed 's/perphp-reports-//')
+            SUM="$dir/summary.env"
             echo "<h3>PHP ${ver}</h3>" >> final/combined.html
 
-            # Check for build errors
-            if [ -f "$dir/build/build.log" ]; then
-              echo "<h4>🔨 Plugin Build</h4>" >> final/combined.html
-              echo "<details><summary>Show Build Log</summary><pre>" >> final/combined.html
-              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/build/build.log" >> final/combined.html
+            if [ -f "$SUM" ]; then
+              echo "<details open><summary>Leg summary</summary><pre>" >> final/combined.html
+              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$SUM" >> final/combined.html
               echo "</pre></details>" >> final/combined.html
-
-              # Add build logs to individual error report if there were build errors
-              if grep -q "failed" "$dir/setup/errors.log" 2>/dev/null; then
-                echo "<h2>🔨 Plugin Build Logs</h2>" >> "$error_report"
-                echo "<div class='warning'>" >> "$error_report"
-                for buildlog in "$dir"/build/*.log; do
-                  [ -f "$buildlog" ] || continue
-                  logname=$(basename "$buildlog")
-                  echo "<h4>${logname}</h4><pre>" >> "$error_report"
-                  sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$buildlog" >> "$error_report"
-                  echo "</pre>" >> "$error_report"
-                done
-                echo "</div>" >> "$error_report"
-              fi
             fi
 
-            # Check for setup errors
-            if [ -f "$dir/setup/errors.log" ] && [ -s "$dir/setup/errors.log" ]; then
-              has_errors=true
-              echo "<h4>⚠️ Setup Errors: <span class='status warning'>ERRORS OCCURRED</span></h4>" >> final/combined.html
-              echo "<p>Some setup steps failed. This may affect test results.</p>" >> final/combined.html
-              echo "<details><summary>Show Setup Errors</summary><pre>" >> final/combined.html
-              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/setup/errors.log" >> final/combined.html
-              echo "</pre></details>" >> final/combined.html
-
-              # Add to individual error report
-              echo "<h2>⚠️ Setup Errors</h2>" >> "$error_report"
-              echo "<div class='warning'>" >> "$error_report"
-              echo "<p><strong>Some setup steps failed. This may affect test results.</strong></p>" >> "$error_report"
-              echo "<pre>" >> "$error_report"
-              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/setup/errors.log" >> "$error_report"
-              echo "</pre></div>" >> "$error_report"
-
-              # Show setup logs for debugging
-              echo "<details><summary>Show All Setup Logs</summary>" >> final/combined.html
-              echo "<h3>Setup Logs</h3>" >> "$error_report"
-              for setuplog in "$dir"/setup/*.log; do
-                [ -f "$setuplog" ] || continue
-                logname=$(basename "$setuplog")
-                echo "<h5>${logname}</h5><pre>" >> final/combined.html
-                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$setuplog" | head -50 >> final/combined.html
-                echo "</pre>" >> final/combined.html
-
-                # Add to individual error report
-                echo "<h4>${logname}</h4><pre>" >> "$error_report"
-                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$setuplog" >> "$error_report"
-                echo "</pre>" >> "$error_report"
-              done
-              echo "</details>" >> final/combined.html
-            else
-              echo "<h4>✅ Setup: <span class='status pass'>SUCCESS</span></h4>" >> final/combined.html
-              echo "<p>WordPress and plugin installed successfully</p>" >> final/combined.html
-            fi
-
-            # PHPCompatibility results
-            if [ -f "$dir/phpcompat/phpcompat-${ver}.txt" ]; then
-              errors=$(grep -c "| ERROR |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
-              warnings=$(grep -c "| WARNING |" "$dir/phpcompat/phpcompat-${ver}.txt" 2>/dev/null || echo "0")
-
-              if [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ]; then
-                echo "<h4>✅ PHPCompatibility Check: <span class='status pass'>PASSED</span></h4>" >> final/combined.html
-                echo "<p>No compatibility issues found for PHP ${ver}</p>" >> final/combined.html
-              else
-                has_errors=true
-                echo "<h4>⚠️ PHPCompatibility Check: <span class='status fail'>ISSUES FOUND</span></h4>" >> final/combined.html
-                echo "<p><strong>${errors}</strong> errors, <strong>${warnings}</strong> warnings</p>" >> final/combined.html
-                echo "<details><summary>Show Details</summary><pre>" >> final/combined.html
-                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/phpcompat/phpcompat-${ver}.txt" >> final/combined.html
+            for pair in \
+              "phpcompat/phpcompat-${ver}.txt:PHPCompatibility (static)" \
+              "fatal/runtime-${ver}.log:Runtime fatal check" \
+              "wpdebug/debug-${ver}.log:WP debug.log" \
+              "setup/errors.log:Setup errors"; do
+              f="$dir/${pair%%:*}"; label="${pair#*:}"
+              if [ -f "$f" ] && [ -s "$f" ]; then
+                echo "<details><summary>${label}</summary><pre>" >> final/combined.html
+                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$f" >> final/combined.html
                 echo "</pre></details>" >> final/combined.html
-
-                # Add to individual error report
-                echo "<h2>⚠️ PHPCompatibility Check - Issues Found</h2>" >> "$error_report"
-                echo "<div class='error'>" >> "$error_report"
-                echo "<p><strong>${errors}</strong> errors, <strong>${warnings}</strong> warnings found</p>" >> "$error_report"
-                echo "<pre>" >> "$error_report"
-                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/phpcompat/phpcompat-${ver}.txt" >> "$error_report"
-                echo "</pre></div>" >> "$error_report"
               fi
-            else
-              echo "<h4>❌ PHPCompatibility Check: <span class='status warning'>NOT RUN</span></h4>" >> final/combined.html
-            fi
-
-            # Fatal error checks
-            if [ -f "$dir/fatal/fatal-${ver}.log" ]; then
-              fatal_count=$(grep -c "\[FATAL\]" "$dir/fatal/fatal-${ver}.log" 2>/dev/null || echo "0")
-              ok_count=$(grep -c "✅ OK:" "$dir/fatal/fatal-${ver}.log" 2>/dev/null || echo "0")
-
-              if [ "$fatal_count" -eq 0 ]; then
-                echo "<h4>✅ Admin Pages Check: <span class='status pass'>PASSED</span></h4>" >> final/combined.html
-                echo "<p>All ${ok_count} admin pages loaded successfully without fatal errors</p>" >> final/combined.html
-                echo "<details><summary>Show Checked Pages</summary><pre>" >> final/combined.html
-                grep "✅ OK:" "$dir/fatal/fatal-${ver}.log" | sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' >> final/combined.html
-                echo "</pre></details>" >> final/combined.html
-              else
-                has_errors=true
-                echo "<h4>❌ Admin Pages Check: <span class='status fail'>FAILED</span></h4>" >> final/combined.html
-                echo "<p><strong>${fatal_count}</strong> page(s) with fatal errors detected</p>" >> final/combined.html
-                echo "<details><summary>Show Error Details</summary><pre>" >> final/combined.html
-                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> final/combined.html
-                echo "</pre></details>" >> final/combined.html
-
-                # Add to individual error report
-                echo "<h2>❌ Admin Pages Check - Fatal Errors</h2>" >> "$error_report"
-                echo "<div class='error'>" >> "$error_report"
-                echo "<p><strong>${fatal_count}</strong> page(s) with fatal errors detected</p>" >> "$error_report"
-                echo "<pre>" >> "$error_report"
-                sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/fatal/fatal-${ver}.log" >> "$error_report"
-                echo "</pre></div>" >> "$error_report"
-              fi
-            else
-              echo "<h4>⚠️ Admin Pages Check: <span class='status warning'>NOT RUN</span></h4>" >> final/combined.html
-            fi
-
-            # WP Debug logs (only show if exists and has content)
-            if [ -f "$dir/wpdebug/debug-${ver}.log" ] && [ -s "$dir/wpdebug/debug-${ver}.log" ]; then
-              has_errors=true
-              echo "<h4>📝 WordPress Debug Log</h4>" >> final/combined.html
-              echo "<details><summary>Show Debug Log</summary><pre>" >> final/combined.html
-              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/wpdebug/debug-${ver}.log" >> final/combined.html
-              echo "</pre></details>" >> final/combined.html
-
-              # Add to individual error report
-              echo "<h2>📝 WordPress Debug Log</h2>" >> "$error_report"
-              echo "<div class='warning'>" >> "$error_report"
-              echo "<pre>" >> "$error_report"
-              sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g' "$dir/wpdebug/debug-${ver}.log" >> "$error_report"
-              echo "</pre></div>" >> "$error_report"
-            fi
-
-            # Screenshots
-            screenshot_count=0
-            for img in "$dir"/screens/*.jpg; do
-              [ -f "$img" ] && screenshot_count=$((screenshot_count + 1))
             done
 
-            if [ "$screenshot_count" -gt 0 ]; then
-              echo "<h4>📸 Screenshots (${screenshot_count})</h4>" >> final/combined.html
+            shots=0
+            for img in "$dir"/screens/*.jpg; do [ -f "$img" ] && shots=$((shots+1)); done
+            if [ "$shots" -gt 0 ]; then
+              echo "<h4>📸 Screenshots (${shots})</h4>" >> final/combined.html
               for img in "$dir"/screens/*.jpg; do
                 [ -f "$img" ] || continue
                 cp "$img" final/
-                imgname=$(basename "$img")
-                # Extract page name from filename
-                pagename=$(echo "$imgname" | sed "s/${ver}_//" | sed 's/.jpg$//' | sed 's/_/ /g')
-                echo "<div class='screenshot'>" >> final/combined.html
-                echo "<strong>📄 ${pagename}</strong><br/>" >> final/combined.html
-                echo "<img src='${imgname}' style='max-width:100%; width:900px; height:auto;'>" >> final/combined.html
-                echo "</div>" >> final/combined.html
+                base=$(basename "$img")
+                page=$(echo "$base" | sed "s/${ver}_//;s/\.jpg$//;s/_/ /g")
+                echo "<div class='screenshot'><strong>📄 ${page}</strong><br/><img src='${base}' style='max-width:100%;width:900px;height:auto;'></div>" >> final/combined.html
               done
-            else
-              echo "<h4>📸 Screenshots: <span class='status warning'>NOT AVAILABLE</span></h4>" >> final/combined.html
             fi
-
-            # Close individual error report
-            echo "</div></body></html>" >> "$error_report"
-
-            # Only keep the error report if there were actual errors
-            if [ "$has_errors" = false ]; then
-              rm -f "$error_report"
-              echo "<p><em>✅ No individual error report needed - all checks passed</em></p>" >> final/combined.html
-            else
-              echo "<p><em>📄 Detailed error report: <a href='php-${ver}-errors.html'>php-${ver}-errors.html</a></em></p>" >> final/combined.html
-            fi
-
-            echo "</div>" >> final/combined.html
             echo "<hr>" >> final/combined.html
           done
 
           echo "</div></body></html>" >> final/combined.html
 
-      - name: Generate combined PDF
-        run: wkhtmltopdf --enable-local-file-access final/combined.html final/combined.pdf || echo "PDF generation failed"
+      - name: Generate PDF (headless Chromium)
+        run: |
+          npm install puppeteer 2>&1 | tail -3 || true
+          cat > print-pdf.js <<'ENDJS'
+          const puppeteer = require('puppeteer');
+          const path = require('path');
+          (async () => {
+            const [inp, out] = process.argv.slice(2);
+            const b = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+            const p = await b.newPage();
+            await p.goto('file://' + path.resolve(inp), { waitUntil: 'networkidle2', timeout: 60000 });
+            await p.pdf({ path: out, format: 'A4', printBackground: true, margin: { top: '12mm', bottom: '12mm', left: '8mm', right: '8mm' } });
+            await b.close();
+          })();
+          ENDJS
+          node print-pdf.js final/combined.html final/combined.pdf || echo "PDF generation failed (HTML still available)"
 
-      - name: Upload FINAL combined artifact
+      - name: Upload final combined artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: essential-blocks-wp-compat-final
           path: final/
           retention-days: 30
 
-      - name: Prepare GitHub Pages deployment
+      - name: Prepare GitHub Pages
         run: |
-          # Create deployment directory
           mkdir -p gh-pages-deploy
-
-          # Copy combined.html and rename to index.html
           cp final/combined.html gh-pages-deploy/index.html
-
-          # Copy all screenshot images
           cp final/*.jpg gh-pages-deploy/ 2>/dev/null || true
-
-          # Create .nojekyll to prevent Jekyll processing
+          cp final/combined.pdf gh-pages-deploy/ 2>/dev/null || true
           touch gh-pages-deploy/.nojekyll
 
       - name: Deploy to GitHub Pages
@@ -891,3 +648,16 @@ jobs:
           user_name: 'github-actions[bot]'
           user_email: 'github-actions[bot]@users.noreply.github.com'
           commit_message: 'Deploy report for run #${{ github.run_number }}'
+
+      - name: Enforce verdict (fail the run if any leg is FAIL)
+        run: |
+          source final/verdict.flag 2>/dev/null || { ANY_FAIL=0; LEG_COUNT=0; }
+          if [ "${LEG_COUNT:-0}" -eq 0 ]; then
+            echo "::error::No PHP legs reported any results (likely a checkout/PAT/setup failure). Nothing was tested."
+            exit 1
+          fi
+          if [ "${ANY_FAIL:-0}" -ne 0 ]; then
+            echo "::error::A PHP fatal or version incompatibility was found in at least one PHP version. See the report."
+            exit 1
+          fi
+          echo "Tested ${LEG_COUNT} PHP version(s). No FAIL verdicts. (INCONCLUSIVE legs, if any, are flagged in the report.)"
