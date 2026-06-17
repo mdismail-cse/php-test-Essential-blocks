@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / OS cruft
+*.swp
+*~
+Thumbs.db
+
+# Local workflow output (only generated inside CI runners)
+reports/
+final/
+gh-pages-deploy/
+node_modules/

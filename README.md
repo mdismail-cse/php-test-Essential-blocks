@@ -1,880 +1,489 @@
-# Essential Blocks - PHP Compatibility Testing Workflow
+# Essential Blocks — PHP Fatal Compatibility Workflow
 
-Automated PHP compatibility testing workflow for the Essential Blocks WordPress plugin across multiple PHP versions.
+Automated GitHub Actions workflow that tests whether **Essential Blocks (free)**, **Essential Blocks Pro**, and the **`src/controls` submodule** trigger a PHP fatal error or a PHP-version incompatibility on any supported PHP version, inside a real WordPress install.
+
+> **Design rule:** a green report means *"we actually tested and found nothing."* If a test could not run (build / install / auth / server / scan failure), the leg is reported as **INCONCLUSIVE** — never as PASS. A real fatal turns the whole run **red**.
 
 ## 📋 Table of Contents
 
 - [Overview](#overview)
-- [Features](#features)
-- [Workflow Architecture](#workflow-architecture)
+- [What gets tested](#what-gets-tested)
+- [Workflow architecture](#workflow-architecture)
+- [Verdicts: how a result is decided](#verdicts-how-a-result-is-decided)
 - [Prerequisites](#prerequisites)
-- [Setup Instructions](#setup-instructions)
-- [Running the Workflow](#running-the-workflow)
-- [Understanding the Reports](#understanding-the-reports)
-- [Workflow Steps Explained](#workflow-steps-explained)
-- [Error Handling](#error-handling)
+- [Setup instructions](#setup-instructions)
+- [Running the workflow](#running-the-workflow)
+- [Understanding the report](#understanding-the-report)
+- [Workflow steps explained](#workflow-steps-explained)
+- [Error handling philosophy](#error-handling-philosophy)
 - [Troubleshooting](#troubleshooting)
-- [Technical Details](#technical-details)
+- [Technical details](#technical-details)
+- [Configuration options](#configuration-options)
 
 ---
 
 ## 🎯 Overview
 
-This GitHub Actions workflow automatically tests the Essential Blocks WordPress plugin for PHP compatibility issues across multiple PHP versions. It performs:
+This workflow performs, for every PHP version in the matrix:
 
-- **Plugin Build** - Builds the plugin with all dependencies using pnpm
-- **PHPCompatibility Scanning** - Static code analysis for PHP version compatibility
-- **WordPress Installation** - Sets up a complete WordPress environment
-- **Fatal Error Detection** - Checks admin pages for runtime errors
-- **Visual Testing** - Captures screenshots of admin pages
-- **Comprehensive Reporting** - Generates HTML and PDF reports with all findings
+- **Plugin builds** — builds `src/controls`, then free, then Pro using pnpm.
+- **Static compatibility scan** — PHPCompatibilityWP analysis of the free and Pro PHP code against the target PHP version.
+- **Real WordPress install** — downloads WordPress, sets up MySQL, installs and activates both plugins.
+- **Runtime fatal detection** — logs in via a headless browser and loads admin + front-end pages, flagging HTTP 500 (white screen of death) or fatal-error markers in the HTML.
+- **Debug-log scan** — captures `wp-content/debug.log` and counts `PHP Fatal error` entries.
+- **Trustworthy reporting** — a combined HTML + PDF report with a **PASS / FAIL / INCONCLUSIVE** verdict per PHP version, deployed to GitHub Pages.
 
----
-
-## ✨ Features
-
-### 🔍 Comprehensive Testing
-- ✅ Tests across multiple PHP versions (7.4, 8.0, 8.1, 8.2, 8.3, 8.4)
-- ✅ Static code analysis with PHPCompatibilityWP
-- ✅ Runtime fatal error detection on admin pages
-- ✅ WordPress debug log capture
-- ✅ Visual regression testing with screenshots
-
-### 🔨 Plugin Build Process
-- ✅ Automatic git submodule initialization
-- ✅ Builds `src/controls` submodule first
-- ✅ Builds root project with all dependencies
-- ✅ Uses pnpm for fast, efficient package management
-- ✅ Logs all build steps for debugging
-
-### 📊 Advanced Reporting
-- ✅ Combined HTML report with summary table
-- ✅ Individual error reports per PHP version
-- ✅ Color-coded status badges (PASS/FAIL/WARNING)
-- ✅ Expandable sections for detailed logs
-- ✅ Screenshots embedded in reports
-- ✅ PDF export for easy sharing
-
-### 🛡️ Error Handling
-- ✅ Workflow continues even if steps fail
-- ✅ All errors logged to dedicated files
-- ✅ Setup errors reported separately
-- ✅ Build errors tracked and displayed
-- ✅ MySQL authentication compatibility for PHP < 7.4
+There are **three independent fatal signals** (static scan, runtime HTTP/HTML, debug.log) so a real fatal is hard to miss, and "we couldn't test" is never reported as a pass.
 
 ---
 
-## 🏗️ Workflow Architecture
+## 🧪 What gets tested
+
+| Repo | How it's tested |
+|------|-----------------|
+| `WPDevelopers/essential-blocks` (free) | Built with pnpm, copied into WordPress, scanned and exercised at runtime. The `controls` submodule is built into the free plugin, so its PHP surfaces here. |
+| `WPDevelopers/essential-blocks-pro` (Pro) | Built with pnpm, copied into WordPress, scanned and exercised at runtime alongside the free plugin. |
+| `EssentialBlocks/controls` (`src/controls` submodule) | Checked out to the requested branch and built first. It is primarily JavaScript; its PHP impact is covered through the free-plugin scan. |
+
+Each run lets you pick the branch for all three independently (`branch`, `pro_branch`, `controls_branch`).
+
+---
+
+## 🏗️ Workflow architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    GitHub Actions Workflow                   │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                     GitHub Actions Workflow                     │
+│   "WP PHP Fatal Compatibility (free + pro + controls × PHP)"    │
+└───────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Job 1: phpcompat (Matrix: PHP 7.2, 7.4, 8.0, 8.1, 8.2...)  │
-├─────────────────────────────────────────────────────────────┤
-│  1. Checkout Essential Blocks (with submodules)              │
-│  2. Setup Node.js 18 + pnpm                                  │
-│  3. Build Plugin                                             │
-│     ├── Initialize submodules                                │
-│     ├── Build src/controls                                   │
-│     └── Build root project                                   │
-│  4. Setup PHP + Composer + WP-CLI                            │
-│  5. Install PHPCompatibilityWP                               │
-│  6. Setup MySQL + WordPress                                  │
-│  7. Install WordPress                                        │
-│  8. Copy & Activate Plugin                                   │
-│  9. Start WordPress Server                                   │
-│ 10. Run PHPCompatibility Scan                                │
-│ 11. Check Admin Pages for Fatal Errors                       │
-│ 12. Take Screenshots with Puppeteer                          │
-│ 13. Upload Artifacts                                         │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  Job 1: phpcompat   (matrix: 8.5, 8.4, 8.3, 8.2, 8.1, 8.0, 7.4)│
+│                     (fail-fast: false · timeout: 45 min)        │
+├───────────────────────────────────────────────────────────────┤
+│   1. Checkout free (+ submodules) and Pro                       │
+│   2. Initialize per-leg summary.env (defaults = "untested")     │
+│   3. pnpm + Node.js 22 + Puppeteer cache                        │
+│   4. Build controls → free → Pro  (records BUILD_* statuses)    │
+│   5. Setup PHP (matrix) + Composer + WP-CLI                     │
+│   6. Install MySQL + PHPCompatibilityWP                         │
+│   7. Prepare + install WordPress       (records WP_INSTALL)     │
+│   8. Copy (rsync) + activate plugins   (records PLUGINS_ACTIVE) │
+│   9. Start WP server (multi-worker)    (records SERVER)         │
+│  10. PHPCompatibility scan (JSON)      (records PHPCOMPAT_*)    │
+│  11. Runtime fatal check + screenshots (records AUTH, RUNTIME_*)│
+│  12. Save + scan debug.log             (records DEBUGLOG_FATALS)│
+│  13. Upload per-PHP artifact (always)                           │
+└───────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Job 2: combine (Runs after all PHP versions complete)      │
-├─────────────────────────────────────────────────────────────┤
-│  1. Download all artifacts                                   │
-│  2. Build combined HTML report                               │
-│     ├── Summary table with all PHP versions                  │
-│     ├── Detailed results per version                         │
-│     ├── Individual error reports                             │
-│     └── Embedded screenshots                                 │
-│  3. Generate PDF from HTML                                   │
-│  4. Upload final artifact                                    │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  Job 2: combine     (needs: phpcompat · if: always())          │
+├───────────────────────────────────────────────────────────────┤
+│   1. Download all per-PHP artifacts                             │
+│   2. Build combined HTML + compute PASS/FAIL/INCONCLUSIVE       │
+│      verdict from each leg's summary.env                        │
+│   3. Generate PDF (headless Chromium)                           │
+│   4. Upload final artifact + deploy to GitHub Pages            │
+│   5. Enforce verdict: fail the run if any leg is FAIL or if     │
+│      zero legs reported                                         │
+└───────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## ⚖️ Verdicts: how a result is decided
+
+Each PHP leg writes a machine-readable `summary.env`. The `combine` job reads it and assigns one verdict:
+
+| Verdict | When | Meaning |
+|---------|------|---------|
+| 🟥 **FAIL** | `PHPCOMPAT_ERRORS > 0` **or** `RUNTIME_FATALS > 0` **or** `DEBUGLOG_FATALS > 0` | A real PHP fatal or version incompatibility was found. |
+| 🟨 **INCONCLUSIVE** | `WP_INSTALL ≠ ok`, `SERVER ≠ ok`, `AUTH ≠ ok`, `PHPCOMPAT_RAN ≠ yes`, `PLUGINS_ACTIVE = fail`, `RUNTIME_INCONCLUSIVE > 0`, **or** the leg never reported | The environment could not be tested reliably. **Do not treat as a pass.** |
+| 🟩 **PASS** | none of the above | Tested, no fatal/incompatibility found. |
+
+FAIL takes priority over INCONCLUSIVE — a found fatal is reported even if some other check was shaky. The whole workflow run fails (red ✗) if **any** leg is FAIL, or if **no** legs reported results (e.g. a bad PAT made every checkout fail).
+
+`summary.env` keys: `PHP`, `FREE_BRANCH`, `PRO_BRANCH`, `CONTROLS_BRANCH`, `BUILD_CONTROLS`, `BUILD_FREE`, `BUILD_PRO`, `WP_INSTALL`, `PLUGINS_ACTIVE`, `SERVER`, `AUTH`, `PHPCOMPAT_RAN`, `PHPCOMPAT_ERRORS`, `PHPCOMPAT_WARNINGS`, `RUNTIME_PAGES`, `RUNTIME_FATALS`, `RUNTIME_INCONCLUSIVE`, `DEBUGLOG_FATALS`.
 
 ---
 
 ## 📦 Prerequisites
 
-### Required GitHub Secrets
+### Required GitHub secret
 
-You need to configure the following secret in your GitHub repository:
+| Secret | Description |
+|--------|-------------|
+| `ESSENTIAL_BLOCKS_PAT` | Personal Access Token with **read access to both private repos**: `WPDevelopers/essential-blocks` *and* `WPDevelopers/essential-blocks-pro`. Use the `repo` scope (classic) or contents:read on both repos (fine-grained). |
 
-| Secret Name | Description | How to Get |
-|-------------|-------------|------------|
-| `ESSENTIAL_BLOCKS_PAT` | Personal Access Token for accessing the private Essential Blocks repository | [Create a PAT](https://github.com/settings/tokens) with `repo` scope |
+**To add it:** repository → **Settings → Secrets and variables → Actions → New repository secret**, name `ESSENTIAL_BLOCKS_PAT`.
 
-**To add the secret:**
-1. Go to your repository → Settings → Secrets and variables → Actions
-2. Click "New repository secret"
-3. Name: `ESSENTIAL_BLOCKS_PAT`
-4. Value: Your Personal Access Token
-5. Click "Add secret"
+> If the PAT lacks access to *either* repo (or expires), every leg fails at checkout and the run fails loudly with "No PHP legs reported any results."
 
-### Repository Access
+### Repository access
 
-The workflow needs access to:
-- `WPDevelopers/essential-blocks` (private repository)
+The PAT must be able to read:
+- `WPDevelopers/essential-blocks` (free)
+- `WPDevelopers/essential-blocks-pro` (Pro)
+- `EssentialBlocks/controls` is pulled as a submodule of the free repo.
 
----
+### GitHub Pages (optional)
 
-## 🚀 Setup Instructions
-
-### 1. Clone This Repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/php-test-Essential-blocks.git
-cd php-test-Essential-blocks
-```
-
-### 2. Configure GitHub Secret
-
-Add `ESSENTIAL_BLOCKS_PAT` secret as described in [Prerequisites](#prerequisites).
-
-### 3. Customize PHP Versions (Optional)
-
-Edit `.github/workflows/wp-phpcompat-full.yml`:
-
-```yaml
-strategy:
-  matrix:
-    php: [ 8.2 ]  # Change to test multiple versions: [7.2, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4]
-```
-
-### 4. Push to GitHub
-
-```bash
-git add .
-git commit -m "Setup PHP compatibility testing workflow"
-git push origin main
-```
+To publish the report, enable Pages from the `gh-pages` branch — see [GITHUB_PAGES_SETUP.md](GITHUB_PAGES_SETUP.md).
 
 ---
 
-## ▶️ Running the Workflow
+## 🚀 Setup instructions
+
+1. **Add the secret** — `ESSENTIAL_BLOCKS_PAT` as above.
+2. **(Optional) adjust the PHP matrix** — edit [.github/workflows/wp-phpcompat-full.yml](.github/workflows/wp-phpcompat-full.yml):
+   ```yaml
+   strategy:
+     matrix:
+       # Quote each value so 8.0/8.5 aren't parsed as floats.
+       php: ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4']
+   ```
+3. **(Optional) enable GitHub Pages** — see [GITHUB_PAGES_SETUP.md](GITHUB_PAGES_SETUP.md).
+
+---
+
+## ▶️ Running the workflow
+
+This workflow is **manual-only** (`workflow_dispatch`).
 
 ### Via GitHub UI
 
-1. Go to your repository on GitHub
-2. Click **Actions** tab
-3. Select **WP PHP Compatibility FULL** workflow
-4. Click **Run workflow** button
-5. Enter the Essential Blocks branch name (default: `master`)
-6. Click **Run workflow**
+1. **Actions** tab → **WP PHP Fatal Compatibility (free + pro + controls × all PHP versions)**.
+2. **Run workflow**, then set the branches:
+   - **branch** — Essential Blocks (free) branch (default `master`)
+   - **pro_branch** — Essential Blocks Pro branch (default `main`)
+   - **controls_branch** — `src/controls` submodule branch (default `master`)
+3. **Run workflow**.
 
 ### Via GitHub CLI
 
 ```bash
-gh workflow run "WP PHP Compatibility FULL" -f branch=master
+gh workflow run "WP PHP Fatal Compatibility (free + pro + controls × all PHP versions)" \
+  -f branch=master \
+  -f pro_branch=main \
+  -f controls_branch=master
 ```
 
-### Monitoring Progress
+> Tip: you can also target it by file name: `gh workflow run wp-phpcompat-full.yml -f branch=master`.
 
-- Watch the workflow run in the Actions tab
-- Each PHP version runs in parallel
-- Total runtime: ~10-15 minutes per PHP version
+A `concurrency` group cancels an in-progress run on the same ref when you start a new one, so two dispatches never race on the `gh-pages` branch.
 
 ---
 
-## 📊 Understanding the Reports
+## 📊 Understanding the report
 
-### Downloading Reports
+### Where to find it
 
-After the workflow completes:
+- **GitHub Pages** (if enabled): `https://<user>.github.io/<repo>/` — always the latest run.
+- **Artifacts**: the workflow run page → **Artifacts** → `essential-blocks-wp-compat-final` (HTML + PDF + screenshots, 30-day retention). Per-PHP raw logs are in `perphp-reports-<php>` (7-day retention).
 
-1. Go to the workflow run page
-2. Scroll to **Artifacts** section at the bottom
-3. Download `essential-blocks-wp-compat-final`
-4. Extract the ZIP file
-
-### Report Files
+### Final artifact contents
 
 ```
 essential-blocks-wp-compat-final/
-├── combined.html              # Main report with all PHP versions
-├── combined.pdf               # PDF version of the report
-├── php-7.2-errors.html        # Individual error report (if errors found)
-├── php-8.0-errors.html        # Individual error report (if errors found)
-├── php-8.2-errors.html        # Individual error report (if errors found)
-└── *.jpg                      # Screenshots from all PHP versions
+├── combined.html      # Main report (deployed as index.html on Pages)
+├── combined.pdf       # PDF render of the report
+└── *.jpg              # Screenshots from every PHP version
 ```
 
-### Report Structure
-
-#### 1. Summary Table
-
-Shows at-a-glance status for all PHP versions:
+### Summary table columns
 
 | Column | Description |
 |--------|-------------|
-| **PHP Version** | The PHP version tested |
-| **Setup** | ✅ Success or ⚠️ Errors during WordPress/plugin setup |
-| **Compatibility Status** | PASS, FAIL, or WARNING based on scan results |
-| **Errors** | Number of PHPCompatibility errors found |
-| **Warnings** | Number of PHPCompatibility warnings found |
-| **Fatal Errors** | Number of pages with fatal errors |
+| **PHP** | PHP version tested |
+| **Verdict** | PASS / FAIL / INCONCLUSIVE (see [Verdicts](#verdicts-how-a-result-is-decided)) |
+| **PHPCompat errors** | PHPCompatibility static-scan error count |
+| **Runtime fatals** | Pages that returned HTTP 500 or contained a fatal marker |
+| **debug.log fatals** | `PHP Fatal error` lines found in `wp-content/debug.log` |
+| **Why** | One-line explanation of the verdict |
 
-#### 2. Detailed Results Per PHP Version
-
-For each PHP version, the report shows:
-
-**🔨 Plugin Build**
-- Build process logs
-- Submodule initialization
-- pnpm install and build output
-- Build verification status
-
-**⚠️ Setup Status**
-- WordPress installation logs
-- Database creation
-- Plugin activation
-- Any setup errors encountered
-
-**🔍 PHPCompatibility Check**
-- Static code analysis results
-- List of incompatible functions/features
-- File locations and line numbers
-- Severity (ERROR or WARNING)
-
-**❌ Admin Pages Check**
-- Fatal error detection on admin pages
-- Pages tested:
-  - Essential Blocks settings page
-  - Post editor
-  - Page editor
-- Error details if found
-
-**📝 WordPress Debug Log**
-- PHP warnings and notices
-- Deprecated function calls
-- Database errors
-
-**📸 Screenshots**
-- Visual snapshots of admin pages
-- Helps identify UI issues
-- Shows actual page state during testing
-
-#### 3. Individual Error Reports
-
-Created only for PHP versions with errors:
-- Focused view of just the errors
-- Easier to share with developers
-- Includes all error details and logs
-
-### Status Badges
+### Status badges
 
 | Badge | Meaning |
 |-------|---------|
-| <span style="background: #d4edda; color: #155724; padding: 4px 12px; border-radius: 4px; font-weight: bold;">✅ PASS</span> | No issues found |
-| <span style="background: #fff3cd; color: #856404; padding: 4px 12px; border-radius: 4px; font-weight: bold;">⚠️ WARNING</span> | Warnings found, but no errors |
-| <span style="background: #f8d7da; color: #721c24; padding: 4px 12px; border-radius: 4px; font-weight: bold;">❌ FAIL</span> | Errors or fatal errors found |
+| 🟩 **PASS** | Tested, no fatal/incompatibility found |
+| 🟥 **FAIL** | A real PHP fatal or version incompatibility was found |
+| 🟨 **INCONCLUSIVE** | Could not be reliably tested — do **not** treat as a pass |
+
+### Per-version detail sections
+
+For each PHP version the report shows (when present): the raw `summary.env`, the PHPCompatibility text report, the runtime fatal-check log, the WordPress `debug.log`, any setup errors, and the screenshots.
 
 ---
 
-## 🔧 Workflow Steps Explained
+## 🔧 Workflow steps explained
 
-### Step 1: Checkout Essential Blocks
+### Checkout (free + Pro)
 
 ```yaml
-- name: Checkout Essential Blocks plugin
-  uses: actions/checkout@v4
+- uses: actions/checkout@v4
   with:
     repository: WPDevelopers/essential-blocks
     ref: ${{ github.event.inputs.branch }}
     token: ${{ secrets.ESSENTIAL_BLOCKS_PAT }}
     path: essential-blocks
     submodules: recursive
+# ...and a second checkout for essential-blocks-pro (ref: pro_branch)
 ```
 
-**What it does:**
-- Clones the Essential Blocks repository
-- Checks out the specified branch
-- Initializes git submodules (including `src/controls`)
-- Uses PAT for authentication
+Both private repos are cloned with the PAT; the free repo pulls `src/controls` recursively.
 
-### Step 2: Setup Node.js & pnpm
+### Initialize per-leg summary
 
-```yaml
-- name: Setup Node.js
-  uses: actions/setup-node@v4
-  with:
-    node-version: '18'
+Creates `reports/<php>/summary.env` with every key defaulted to an "untested" value, plus the report subdirectories. This is what makes a non-running step show as INCONCLUSIVE instead of silently passing.
 
-- name: Install pnpm
-  run: npm install -g pnpm
-```
+### pnpm + Node.js + Puppeteer cache
 
-**What it does:**
-- Installs Node.js version 18
-- Installs pnpm package manager globally
-- Required for building the plugin
+- `pnpm/action-setup@v4` (pnpm 9)
+- `actions/setup-node@v4` (Node.js 22, pnpm cache keyed on `**/pnpm-lock.yaml`)
+- Puppeteer's Chromium cached at `~/.cache/puppeteer`, keyed on `pnpm-lock.yaml`.
 
-### Step 3: Build Essential Blocks Plugin
+### Build controls → free → Pro
 
 ```bash
-# Initialize submodules
+# inside essential-blocks:
 git submodule update --init --recursive
-
-# Build src/controls first
-cd src/controls
-pnpm install
-pnpm run build
-
-# Build root project
-cd ../..
-pnpm install
-pnpm run build
+# switch src/controls to the requested branch, then:
+( cd src/controls && pnpm install && pnpm run build )   # BUILD_CONTROLS
+pnpm install && pnpm run build                          # BUILD_FREE
+# inside essential-blocks-pro:
+pnpm install && pnpm run build                          # BUILD_PRO
 ```
 
-**What it does:**
-- Initializes git submodules
-- Builds the `src/controls` submodule first
-- Builds the root project
-- Logs all steps to `reports/{php-version}/build/`
-- Continues even if build fails
+Each build's real exit status is recorded (`ok`/`fail`) in `summary.env`. The build logs land in `reports/<php>/build/`. A JS build failure does **not** suppress the PHP static scan (which works on source regardless).
 
-**Why build before WordPress setup:**
-- Plugin needs `.config/` directory and webpack config
-- Submodules need git repository context
-- Dependencies resolve correctly in original repo
-
-### Step 4: Setup PHP & Tools
+### Setup PHP + tools
 
 ```yaml
-- name: Setup PHP
-  uses: shivammathur/setup-php@v2
+- uses: shivammathur/setup-php@v2
   with:
     php-version: ${{ matrix.php }}
-    tools: composer, phpcs, wp-cli
-    extensions: mbstring, intl, curl, zip, xml, json
+    tools: composer, wp-cli
+    extensions: mbstring, intl, curl, zip, xml, json, mysqli
 ```
 
-**What it does:**
-- Installs the specified PHP version
-- Installs Composer, PHP_CodeSniffer, WP-CLI
-- Installs required PHP extensions
+`phpcs` / PHPCompatibilityWP are installed separately via `composer global require` and added to `$GITHUB_PATH`.
 
-### Step 5: Install PHPCompatibilityWP
+### Prepare + install WordPress
+
+- Starts MySQL; for **PHP < 8.0** (numeric `sort -V` check) switches the root user to `mysql_native_password` so `mysqli` can connect to MySQL 8.
+- Creates the DB, downloads WordPress, writes `wp-config.php` with `WP_DEBUG`, `WP_DEBUG_LOG`, and `WP_DEBUG_DISPLAY=false` (fatals go to the log / produce an HTTP 500, keeping screenshots clean).
+- Installs WordPress and verifies it responds (`wp option get siteurl`) → records `WP_INSTALL`.
+
+### Copy + activate plugins
 
 ```bash
-composer global require \
-  "squizlabs/php_codesniffer:^3.0" \
-  "dealerdirect/phpcodesniffer-composer-installer:*" \
-  "phpcompatibility/phpcompatibility-wp:*"
+rsync -a --exclude node_modules --exclude .git essential-blocks/     wp-content/plugins/essential-blocks/
+rsync -a --exclude node_modules --exclude .git essential-blocks-pro/ wp-content/plugins/essential-blocks-pro/
+wp plugin activate essential-blocks essential-blocks-pro --allow-root
 ```
 
-**What it does:**
-- Installs PHP_CodeSniffer 3.x
-- Installs PHPCompatibilityWP coding standard
-- Configures phpcs with correct installed paths
+`node_modules`/`.git` are excluded (large/irrelevant) but `vendor` is **kept** (Composer autoload is needed at runtime). Activation result → `PLUGINS_ACTIVE` (`ok`/`partial`/`fail`).
 
-### Step 6: Setup MySQL & WordPress
+### Start WordPress server (multi-worker)
 
 ```bash
-# Start MySQL
-sudo /etc/init.d/mysql start
-
-# For PHP < 7.4, change MySQL authentication
-if [[ "${{ matrix.php }}" < "7.4" ]]; then
-  mysql -uroot -proot -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';"
-fi
-
-# Create database
-mysql -e 'CREATE DATABASE wp;' -uroot -proot
-
-# Download WordPress
-wp core download --allow-root
-
-# Create wp-config.php
-wp config create --dbname=wp --dbuser=root --dbpass=root
+PHP_CLI_SERVER_WORKERS=8 nohup wp server --host=127.0.0.1 --port=8080 --path=. --allow-root &
 ```
 
-**What it does:**
-- Starts MySQL server
-- Configures MySQL authentication for PHP < 7.4 compatibility
-- Creates WordPress database
-- Downloads latest WordPress
-- Creates wp-config.php with debug settings
+`PHP_CLI_SERVER_WORKERS` lets the PHP built-in server handle the concurrent sub-requests (admin-ajax / REST / assets) an admin page makes, instead of deadlocking. The step waits for the server and records `SERVER`.
 
-**MySQL Authentication Fix:**
-- MySQL 8.0 uses `caching_sha2_password` by default
-- PHP 7.2 doesn't support this authentication method
-- Workflow automatically switches to `mysql_native_password` for PHP < 7.4
-
-### Step 7: Install WordPress
+### PHPCompatibility scan
 
 ```bash
-wp core install \
-  --url="http://127.0.0.1:8080" \
-  --title="WP Test" \
-  --admin_user="admin" \
-  --admin_password="admin" \
-  --admin_email="admin@example.com" \
-  --skip-email \
-  --allow-root
+phpcs --standard=PHPCompatibilityWP \
+      --runtime-set testVersion "${{ matrix.php }}" \
+      --extensions=php --ignore='*/node_modules/*,*/.pnpm/*' \
+      --report-full=...txt --report-json=...json \
+      wp-content/plugins/essential-blocks \
+      wp-content/plugins/essential-blocks-pro
 ```
 
-**What it does:**
-- Installs WordPress
-- Creates admin user (username: `admin`, password: `admin`)
-- Configures site URL for local server
+Both plugins are scanned in one pass. Error/warning **counts are parsed from the JSON report** (authoritative `totals`), not by counting log lines. Records `PHPCOMPAT_RAN`, `PHPCOMPAT_ERRORS`, `PHPCOMPAT_WARNINGS`.
 
-### Step 8: Copy & Activate Plugin
+### Runtime fatal check + screenshots
 
-```bash
-# Copy built plugin to WordPress
-cp -R essential-blocks/* wp-content/plugins/essential-blocks/
+A single headless-browser (Puppeteer) session logs in with the admin password, then for each target page records a verdict (`OK` / `FATAL` / `INCONCLUSIVE`) and saves a 1920×1080 JPEG screenshot. A page is **FATAL** if it returns HTTP ≥ 500 or its HTML contains a fatal/parse/uncaught marker; a lost session is **INCONCLUSIVE**, never a silent pass.
 
-# Update all plugins
-wp plugin update --all --allow-root
+Pages checked:
 
-# Activate Essential Blocks
-wp plugin activate essential-blocks --allow-root
-```
+| Name | URL |
+|------|-----|
+| `frontend_home` | `/` |
+| `dashboard` | `/wp-admin/` |
+| `plugins` | `/wp-admin/plugins.php` |
+| `eb_options` | `/wp-admin/admin.php?page=essential-blocks&tab=options` |
+| `eb_quick_setup` | `/wp-admin/admin.php?page=eb-quick-setup` (Pro deactivated around this free-only screen) |
+| `editor_post` | `/wp-admin/post-new.php?post_type=post` |
+| `editor_page` | `/wp-admin/post-new.php?post_type=page` |
 
-**What it does:**
-- Copies the built plugin to WordPress plugins directory
-- Updates all plugins to latest versions
-- Activates Essential Blocks plugin
+Records `AUTH`, `RUNTIME_PAGES`, `RUNTIME_FATALS`, `RUNTIME_INCONCLUSIVE`.
 
-### Step 9: Start WordPress Server
+### Save + scan debug.log
 
-```bash
-wp server --host=127.0.0.1 --port=8080 --allow-root
-```
+Copies `wp-content/debug.log` to the report and counts `PHP Fatal error` lines → `DEBUGLOG_FATALS`.
 
-**What it does:**
-- Starts WordPress built-in PHP server
-- Listens on `http://127.0.0.1:8080`
-- Required for admin page checks and screenshots
+### Combine + deploy
 
-### Step 10: Run PHPCompatibility Scan
-
-```bash
-phpcs \
-  --standard=PHPCompatibilityWP \
-  --runtime-set testVersion "8.2" \
-  --extensions=php \
-  --report=full \
-  --report-file=reports/8.2/phpcompat/phpcompat-8.2.txt \
-  wp-content/plugins/essential-blocks
-```
-
-**What it does:**
-- Scans all PHP files in the plugin
-- Checks for compatibility with the target PHP version
-- Reports errors and warnings
-- Saves results to text file
-
-**Common issues detected:**
-- Deprecated functions
-- Removed functions
-- New syntax not available in older PHP
-- Changed function signatures
-
-### Step 11: Check Admin Pages for Fatal Errors
-
-```bash
-# Pages checked:
-# - http://127.0.0.1:8080/wp-admin/admin.php
-# - http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post
-# - http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page
-
-# For each page:
-curl -b cookies.txt "$url" -o page.html
-grep -E "Fatal error|Parse error|Uncaught Error" page.html
-```
-
-**What it does:**
-- Logs in to WordPress admin with curl
-- Fetches admin pages
-- Searches for PHP fatal errors in HTML output
-- Logs results to `reports/{php-version}/fatal/`
-
-**Error patterns detected:**
-- `<b>Fatal error</b>:`
-- `<b>Parse error</b>:`
-- `Fatal error:`
-- `Parse error:`
-- `Uncaught Error:`
-- `Uncaught Exception:`
-
-### Step 12: Take Screenshots
-
-```javascript
-// Uses Puppeteer to:
-// 1. Login to WordPress admin
-// 2. Navigate to target pages
-// 3. Take full-page screenshots
-// 4. Save as JPEG images
-
-const pages = [
-  'Essential Blocks settings',
-  'Post editor',
-  'Page editor'
-];
-```
-
-**What it does:**
-- Launches headless Chrome browser
-- Logs in with admin credentials
-- Navigates to each admin page
-- Captures 1920x1080 viewport screenshots
-- Converts PNG to JPEG for smaller file size
-- Saves to `reports/{php-version}/screens/`
-
-**Why screenshots are useful:**
-- Visual confirmation of page loading
-- Detect UI/layout issues
-- Verify plugin activation
-- Debug authentication problems
-
-### Step 13: Upload Artifacts
-
-```yaml
-- name: Upload per-PHP artifacts
-  uses: actions/upload-artifact@v4
-  with:
-    name: perphp-reports-8.2
-    path: reports/8.2
-    retention-days: 7
-```
-
-**What it does:**
-- Uploads all reports for this PHP version
-- Stored as GitHub Actions artifact
-- Available for 7 days
-- Used by combine job
+The `combine` job downloads every artifact, computes the verdict table, renders `combined.html`, prints it to `combined.pdf` with headless Chromium, uploads the final artifact, and deploys `index.html` + screenshots + PDF to GitHub Pages. A final step fails the run if any leg is FAIL or if no legs reported.
 
 ---
 
-## 🛡️ Error Handling
+## 🛡️ Error handling philosophy
 
-### Graceful Failure
+This workflow is **not** "best effort, always green." It deliberately separates two kinds of failure:
 
-The workflow is designed to **continue even when steps fail**:
+- **A real fatal / incompatibility** → the leg is **FAIL** and the whole run goes **red**.
+- **An environment that couldn't be tested** (build/install/auth/server/scan gap) → the leg is **INCONCLUSIVE**, surfaced clearly, and never counted as a pass.
 
-```bash
-# Example: Continue on error
-pnpm install 2>&1 | tee build.log || echo "Build failed" >> errors.log
-```
+Individual setup commands still tee their output to per-step logs so you can debug, but their *status* is recorded and rolled up into the verdict rather than being swallowed. The artifact upload uses `if: always()`, so even a leg that dies mid-way still publishes whatever it captured.
 
-**Benefits:**
-- All PHP versions complete testing
-- Partial results are still useful
-- Errors are logged for debugging
-- No workflow failures due to plugin issues
-
-### Error Logging
-
-All errors are logged to dedicated files:
+### Per-version artifact layout
 
 ```
-reports/{php-version}/
+reports/<php>/
+├── summary.env                 # machine-readable status (drives the verdict)
 ├── setup/
-│   ├── errors.log              # Summary of all setup errors
-│   ├── mysql-config.log        # MySQL authentication
-│   ├── db-create.log           # Database creation
-│   ├── wp-download.log         # WordPress download
-│   ├── wp-config.log           # wp-config.php creation
-│   ├── wp-install.log          # WordPress installation
-│   ├── plugin-copy.log         # Plugin copy
-│   ├── plugin-update.log       # Plugin update
-│   ├── plugin-activate.log     # Plugin activation
-│   └── app-password.log        # Application password
+│   ├── errors.log
+│   ├── mysql-config.log
+│   ├── db-create.log
+│   ├── wp-download.log
+│   ├── wp-config.log
+│   ├── wp-install.log
+│   ├── plugin-copy.log / pro-plugin-copy.log
+│   └── plugin-activate.log / pro-plugin-activate.log
 ├── build/
-│   ├── build.log               # Build process summary
-│   ├── submodule.log           # Git submodule init
-│   ├── controls-install.log    # src/controls pnpm install
-│   ├── controls-build.log      # src/controls build
-│   ├── root-install.log        # Root pnpm install
-│   └── root-build.log          # Root build
+│   ├── submodule.log
+│   ├── controls-branch.log
+│   ├── controls-install.log / controls-build.log
+│   ├── free-install.log / free-build.log
+│   └── pro-install.log / pro-build.log
 ├── phpcompat/
-│   └── phpcompat-8.2.txt       # PHPCompatibility scan results
+│   ├── phpcompat-<php>.txt      # human-readable report
+│   └── phpcompat-<php>.json     # authoritative counts
 ├── fatal/
-│   ├── fatal-8.2.log           # Fatal error check results
-│   ├── admin.html              # Admin page HTML
-│   ├── editor_post.html        # Post editor HTML
-│   └── editor_page.html        # Page editor HTML
+│   └── runtime-<php>.log        # per-page VERDICT lines
 ├── wpdebug/
-│   └── debug-8.2.log           # WordPress debug.log
+│   └── debug-<php>.log
 └── screens/
-    ├── 8.2_admin.jpg           # Admin page screenshot
-    ├── 8.2_editor_post.jpg     # Post editor screenshot
-    └── 8.2_editor_page.jpg     # Page editor screenshot
+    └── <php>_<page>.jpg
 ```
-
-### Error Reporting
-
-Errors are reported in multiple ways:
-
-1. **Setup Errors Section** - Shows which setup steps failed
-2. **Build Logs** - Expandable sections with full build output
-3. **Individual Error Reports** - Separate HTML files per PHP version
-4. **Summary Table** - At-a-glance status with ⚠️ warnings
 
 ---
 
 ## 🔍 Troubleshooting
 
-### Common Issues
+#### Run fails immediately on every PHP version
+**Cause:** `ESSENTIAL_BLOCKS_PAT` is missing, expired, or lacks access to one of the private repos.
+**Fix:** confirm the secret exists and can read both `essential-blocks` and `essential-blocks-pro`. The run will say *"No PHP legs reported any results."*
 
-#### 1. Workflow Fails to Start
+#### A leg shows INCONCLUSIVE
+**Cause:** WordPress install, plugin activation, server start, login, or the static scan couldn't complete. **It does not mean "passed."**
+**Fix:** open that version's section in the report — the **Why** column and the `setup/errors.log` / `runtime-<php>.log` pinpoint which step failed. Re-run after fixing the environment issue.
 
-**Problem:** Workflow doesn't run when triggered
+#### A leg shows FAIL
+**Cause:** a real PHP fatal or version incompatibility. Check the **PHPCompatibility** report (static), the **Runtime fatal check** log (which page 500'd), and the **debug.log** for the stack trace.
 
-**Solutions:**
-- ✅ Check that `ESSENTIAL_BLOCKS_PAT` secret is configured
-- ✅ Verify PAT has `repo` scope
-- ✅ Ensure PAT hasn't expired
-- ✅ Check workflow file syntax with `yamllint`
+#### A new PHP version (e.g. 8.5) is INCONCLUSIVE while older ones pass
+**Possible causes:** PHPCompatibilityWP may not yet ship full rule coverage for the newest PHP (the runtime + debug.log signals still apply), or `composer global require` couldn't satisfy a platform constraint under that PHP. For the latter, adding `--ignore-platform-req=php` to the Composer step lets the tools install.
+**Note:** on a brand-new PHP, a dashboard HTTP 500 can be WordPress core itself, not the plugins — the static scan (scoped to the plugin dirs) is the cleaner per-repo signal there.
 
-#### 2. Plugin Build Fails
+#### Screenshots show the login page
+**Cause:** authentication didn't hold. The affected pages are reported as INCONCLUSIVE (not OK), and `AUTH` is recorded in `summary.env`. Check `wp-install.log` and the runtime log.
 
-**Problem:** Build step shows errors in logs
-
-**Common causes:**
-- Missing dependencies in `package.json`
-- Incompatible Node.js version
-- Submodule not initialized
-- Missing `.config/` directory
-
-**Solutions:**
-- ✅ Check `build.log` for specific errors
-- ✅ Verify submodules are initialized
-- ✅ Ensure Node.js 18 is used
-- ✅ Check that build works locally
-
-#### 3. MySQL Authentication Error (PHP 7.2)
-
-**Problem:** `The server requested authentication method unknown to the client`
-
-**Solution:**
-- ✅ Workflow automatically handles this for PHP < 7.4
-- ✅ Check `mysql-config.log` for authentication change
-- ✅ Verify MySQL started successfully
-
-#### 4. Screenshots Show Login Page
-
-**Problem:** Screenshots show wp-login.php instead of admin pages
-
-**Common causes:**
-- Authentication failed
-- Session cookies not working
-- WordPress not fully installed
-
-**Solutions:**
-- ✅ Check `wp-install.log` for installation errors
-- ✅ Verify admin user was created
-- ✅ Check Puppeteer login logs in workflow output
-
-#### 5. No Artifacts Generated
-
-**Problem:** No artifacts available after workflow completes
-
-**Solutions:**
-- ✅ Check if workflow completed successfully
-- ✅ Verify all jobs finished (not cancelled)
-- ✅ Check artifact retention period (7 days for per-PHP, 30 days for final)
-
-#### 6. PDF Generation Fails
-
-**Problem:** `combined.pdf` not created
-
-**Solutions:**
-- ✅ Check wkhtmltopdf installation
-- ✅ Verify HTML file is valid
-- ✅ Check for file access permissions
-- ✅ HTML report is still available even if PDF fails
+#### PDF not generated
+**Cause:** the headless-Chromium print step failed. The HTML report is still produced and deployed; the PDF is best-effort.
 
 ---
 
-## 🔬 Technical Details
+## 🔬 Technical details
 
-### PHP Versions Tested
+### PHP versions tested
 
-| Version | Status | Notes |
-|---------|--------|-------|
-| 7.4 | ✅ Supported | Minimum supported version |
-| 8.0 | ✅ Supported | |
-| 8.1 | ✅ Supported | |
-| 8.2 | ✅ Supported | |
-| 8.3 | ✅ Supported | |
-| 8.4 | ✅ Supported | Latest version |
+| Version | Notes |
+|---------|-------|
+| 8.5 | Newest; static-scan rule coverage may lag — rely on runtime + debug.log signals |
+| 8.4 | |
+| 8.3 | |
+| 8.2 | |
+| 8.1 | |
+| 8.0 | |
+| 7.4 | Minimum supported; uses `mysql_native_password` for MySQL 8 |
 
-### Tools & Dependencies
+### Tools & dependencies
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Node.js | 18 | JavaScript runtime for building plugin |
-| pnpm | Latest | Fast, disk-efficient package manager |
-| PHP | Matrix | Target PHP version for testing |
-| Composer | Latest | PHP dependency manager |
-| WP-CLI | Latest | WordPress command-line interface |
-| PHP_CodeSniffer | 3.x | Code analysis framework |
-| PHPCompatibilityWP | Latest | WordPress-specific PHP compatibility rules |
-| Puppeteer | Latest | Headless browser for screenshots |
-| wkhtmltopdf | Latest | HTML to PDF converter |
-| MySQL | 8.0 | Database server (pre-installed on runner) |
+| Node.js | 22 | Build the plugins; run Puppeteer |
+| pnpm | 9 | Package manager |
+| PHP | matrix | Target version under test |
+| Composer | latest | Installs phpcs + PHPCompatibilityWP |
+| WP-CLI | latest | WordPress setup |
+| PHP_CodeSniffer | 3.x | Static-analysis framework |
+| PHPCompatibilityWP | latest | PHP-version compatibility rules |
+| Puppeteer (Chromium) | latest | Runtime fatal check, screenshots, **and** PDF rendering |
+| MySQL | 8 | Database (installed via apt) |
 
-### GitHub Actions Runner
+### Runner & timing
 
-- **OS:** Ubuntu Latest
-- **Architecture:** x64
-- **Pre-installed:** MySQL 8.0, Git, curl, wget
-- **Resources:** 2-core CPU, 7 GB RAM, 14 GB SSD
-
-### Workflow Execution Time
-
-| Step | Approximate Time |
-|------|------------------|
-| Checkout & Setup | 1-2 minutes |
-| Plugin Build | 2-3 minutes |
-| WordPress Setup | 2-3 minutes |
-| PHPCompatibility Scan | 1-2 minutes |
-| Admin Page Checks | 1 minute |
-| Screenshots | 2-3 minutes |
-| **Total per PHP version** | **10-15 minutes** |
-| Combine Reports | 1-2 minutes |
-| **Total (1 PHP version)** | **11-17 minutes** |
-| **Total (7 PHP versions)** | **11-17 minutes** (parallel) |
-
-### File Sizes
-
-| File | Approximate Size |
-|------|------------------|
-| Per-PHP artifact | 5-10 MB |
-| Screenshot (JPEG) | 200-500 KB |
-| combined.html | 500 KB - 2 MB |
-| combined.pdf | 1-5 MB |
-| Individual error report | 100-500 KB |
-
-### Network Usage
-
-- WordPress download: ~20 MB
-- pnpm dependencies: ~100-200 MB
-- Puppeteer (Chromium): ~150 MB
-- Total per run: ~300-400 MB
+- **OS:** `ubuntu-latest` · per-leg `timeout-minutes: 45`.
+- **Matrix:** `fail-fast: false` (one failing version doesn't stop the others); `combine` runs with `if: always()`.
+- All PHP versions run in parallel; wall-clock is roughly the slowest single leg plus the combine job.
 
 ---
 
-## 📝 Configuration Options
+## ⚙️ Configuration options
 
-### Customizing PHP Versions
+All edits are in [.github/workflows/wp-phpcompat-full.yml](.github/workflows/wp-phpcompat-full.yml).
 
-Edit `.github/workflows/wp-phpcompat-full.yml`:
+### PHP versions
 
 ```yaml
 strategy:
   matrix:
-    # Test single version
-    php: [ 8.2 ]
-
-    # Test multiple versions
-    php: [ 7.4, 8.0, 8.2 ]
-
-    # Test all supported versions
-    php: [ 7.4, 8.0, 8.1, 8.2, 8.3, 8.4 ]
+    php: ['8.5', '8.4', '8.3', '8.2', '8.1', '8.0', '7.4']  # keep values quoted
 ```
 
-### Customizing Branch
-
-Change the default branch in workflow file:
+### Default branches
 
 ```yaml
-inputs:
-  branch:
-    description: 'Essential Blocks branch to test'
-    required: true
-    default: 'master'  # Change this
+on:
+  workflow_dispatch:
+    inputs:
+      branch:          { default: 'master' }  # free
+      pro_branch:      { default: 'main'   }  # pro
+      controls_branch: { default: 'master' }  # src/controls
 ```
 
-Or specify when running:
-```bash
-gh workflow run "WP PHP Compatibility FULL" -f branch=develop
-```
+### Pages to check at runtime
 
-### Customizing Pages to Check
+Edit the `TARGETS` array in the **Runtime fatal check** step (`"<url> <name>"` per line).
 
-Edit the `TARGETS` array in the workflow:
-
-```bash
-TARGETS=(
-  "http://127.0.0.1:8080/wp-admin/admin.php admin"
-  "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=post editor_post"
-  "http://127.0.0.1:8080/wp-admin/post-new.php?post_type=page editor_page"
-  # Add more pages:
-  "http://127.0.0.1:8080/wp-admin/plugins.php plugins"
-)
-```
-
-### Customizing Artifact Retention
+### Artifact retention
 
 ```yaml
-- name: Upload per-PHP artifacts
-  uses: actions/upload-artifact@v4
-  with:
-    retention-days: 7  # Change this (1-90 days)
-
-- name: Upload FINAL combined artifact
-  uses: actions/upload-artifact@v4
-  with:
-    retention-days: 30  # Change this (1-90 days)
+# per-PHP artifact
+retention-days: 7
+# final combined artifact
+retention-days: 30
 ```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test the workflow
-5. Submit a pull request
 
 ---
 
 ## 📄 License
 
-This project is licensed under the MIT License.
-
----
+MIT.
 
 ## 🙏 Acknowledgments
 
-- **Essential Blocks Team** - For the amazing WordPress plugin
-- **PHPCompatibility** - For the excellent compatibility checking tool
-- **WordPress** - For the powerful CMS platform
-- **GitHub Actions** - For the CI/CD infrastructure
+Essential Blocks team · PHPCompatibility · WordPress · GitHub Actions.
 
 ---
 
-## 📞 Support
-
-For issues or questions:
-
-1. Check the [Troubleshooting](#troubleshooting) section
-2. Review workflow logs in GitHub Actions
-3. Open an issue in this repository
-
----
-
-**Made with ❤️ for WordPress Security & QA**
+**Made with ❤️ for WordPress QA & compatibility testing**

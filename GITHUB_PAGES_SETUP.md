@@ -1,232 +1,131 @@
-# 📄 GitHub Pages Setup for PHP Compatibility Reports
+# 📄 GitHub Pages Setup for the Compatibility Report
 
-This guide explains how to host your PHP compatibility reports (combined.html only) on GitHub Pages, making them accessible via a public URL without downloading artifacts.
+This guide explains how to publish the PHP fatal-compatibility report to GitHub Pages so it's viewable at a public URL without downloading artifacts.
 
 ---
 
-## 🎯 What This Does
+## 🎯 What this does
 
-After each workflow run, **only the combined.html report** will be automatically deployed to GitHub Pages at:
+After each workflow run, the `combine` job deploys the report to GitHub Pages at:
 
 ```
 https://<your-username>.github.io/<repo-name>/
 ```
 
-**What's Deployed:**
-- ✅ `combined.html` only (renamed to `index.html`)
-- ❌ PDF files (not deployed - available in artifacts)
-- ❌ Individual error reports (not deployed - available in artifacts)
-- ❌ Screenshots (not deployed - available in artifacts)
+**What gets deployed (to the `gh-pages` branch):**
+- ✅ `combined.html` — published as `index.html`
+- ✅ `combined.pdf` — the PDF render of the report
+- ✅ `*.jpg` — all screenshots referenced by the report
 
-**Features:**
-- ✅ **Always Latest** - Each deployment replaces the previous one
-- ✅ **Single URL** - Always the same URL for the latest report
-- ✅ **No Downloads** - View reports directly in browser
-- ✅ **Easy Sharing** - Share URLs with team members
-- ✅ **Lightweight** - Only HTML, no large files
-- ✅ **Clean History** - Old reports are replaced (not kept)
+**Behavior:**
+- ✅ **Always latest** — each run replaces the previous deployment (`force_orphan: true`, `keep_files: false`).
+- ✅ **Single stable URL** — bookmark it; it always shows the most recent run.
+- ✅ **No history kept on Pages** — older reports remain available as workflow **artifacts** (30-day retention).
+
+> Earlier versions of this workflow deployed only the HTML. The current workflow deploys the HTML, the PDF, and the screenshots together, so images render directly on the hosted page.
 
 ---
 
-## 🔧 Setup Instructions
+## 🔧 Setup instructions
 
-### **Step 1: Enable GitHub Pages**
+### Step 1 — Enable GitHub Pages
 
-1. Go to your repository on GitHub
-2. Click **Settings** → **Pages** (in left sidebar)
-3. Under **Source**, select:
-   - **Source:** `Deploy from a branch`
-   - **Branch:** `gh-pages`
-   - **Folder:** `/ (root)`
-4. Click **Save**
+1. Repository → **Settings → Pages**.
+2. Under **Build and deployment → Source**, choose **Deploy from a branch**.
+3. **Branch:** `gh-pages` · **Folder:** `/ (root)` → **Save**.
 
-### **Step 2: Run the Workflow**
+> Keep the source as **"Deploy from a branch → `gh-pages`"**. The workflow deploys via [`peaceiris/actions-gh-pages`](https://github.com/peaceiris/actions-gh-pages), which pushes to that branch. If you switch the source to "GitHub Actions", the pushed report will stop showing up.
 
-1. Go to **Actions** tab
-2. Select **WP PHP Compatibility FULL** workflow
-3. Click **Run workflow**
-4. Select branches and click **Run workflow**
+The `gh-pages` branch is created automatically by the first successful run, so you may need to run the workflow once before the branch appears in the Pages dropdown.
 
-### **Step 3: Wait for Deployment**
+### Step 2 — Run the workflow
 
-- The workflow will complete in ~14 minutes
-- GitHub Pages deployment takes an additional 1-2 minutes
-- You'll see a new deployment in **Settings → Pages**
+1. **Actions** tab → **WP PHP Fatal Compatibility (free + pro + controls × all PHP versions)**.
+2. **Run workflow**, choose the `branch` / `pro_branch` / `controls_branch`, and confirm.
 
-### **Step 4: Access Your Report**
+### Step 3 — Wait for deployment
 
-Your report will be available at:
+- The matrix + combine jobs finish, then GitHub Pages takes another 1–2 minutes to publish.
+- You can watch it under **Settings → Pages** and in the **Deploy to GitHub Pages** step logs.
+
+### Step 4 — Open your report
 
 ```
 https://<your-username>.github.io/<repo-name>/
 ```
 
-**Example:**
-```
-https://mdismail.github.io/php-test-Essential-blocks/
-```
+Example: `https://mdismail-cse.github.io/php-test-Essential-blocks/`
 
 ---
 
-## 📂 URL Structure
+## 🔍 How it works
 
-### **Latest Report (Always Same URL)**
-```
-https://<your-username>.github.io/<repo-name>/
-```
-- **Always shows the most recent report**
-- Each new workflow run replaces the previous report
-- Bookmark this URL for quick access
-- Example: `https://mdismail-cse.github.io/php-test-Essential-blocks/`
+1. The `combine` job builds `final/combined.html`, renders `final/combined.pdf` (headless Chromium), and gathers the screenshots into `final/`.
+2. The **Prepare GitHub Pages** step assembles `gh-pages-deploy/`:
+   ```
+   gh-pages-deploy/
+   ├── .nojekyll          # disables Jekyll processing
+   ├── index.html         # copied from combined.html
+   ├── combined.pdf
+   └── *.jpg              # screenshots
+   ```
+3. The **Deploy to GitHub Pages** step force-pushes that directory to the `gh-pages` branch:
+   ```yaml
+   - uses: peaceiris/actions-gh-pages@v3
+     with:
+       github_token: ${{ secrets.GITHUB_TOKEN }}
+       publish_dir: ./gh-pages-deploy
+       keep_files: false
+       force_orphan: true
+   ```
+4. GitHub Pages serves it over HTTPS.
 
-### **What About Other Files?**
-
-**PDF, Screenshots, Individual Error Reports:**
-- ❌ Not deployed to GitHub Pages
-- ✅ Available in GitHub Actions artifacts
-- Download from: Actions → Workflow Run → Artifacts → `essential-blocks-wp-compat-final`
-
-### **What About Report History?**
-
-- ❌ Old reports are **NOT kept** on GitHub Pages
-- ✅ Each deployment replaces the previous one
-- ✅ Old reports are still available in GitHub Actions artifacts (30 days retention)
-
----
-
-## 🔍 How It Works
-
-### **Deployment Process**
-
-1. **Workflow completes** → Generates `final/` directory with reports
-2. **Deploy to GitHub Pages** → Pushes to `gh-pages` branch
-   - Creates `reports/<run-number>/` directory
-   - Copies all files (HTML, PDF, screenshots)
-3. **Create redirect** → Updates root `index.html` to redirect to latest report
-4. **GitHub Pages builds** → Makes files accessible via HTTPS
-
-### **File Structure on gh-pages Branch**
-
-```
-gh-pages/
-├── .nojekyll                            # Prevents Jekyll processing
-└── index.html                           # Latest combined.html report
-```
-
-**Note:**
-- Only `combined.html` is deployed (renamed to `index.html`)
-- Each deployment completely replaces the previous one
-- No subdirectories, no old reports kept
+A `concurrency` group on the workflow cancels an in-progress run on the same ref when a new one starts, so two runs never race to push `gh-pages`.
 
 ---
 
 ## 🛠️ Troubleshooting
 
-### **Issue: 404 Page Not Found**
+### 404 — page not found
+- Ensure **Settings → Pages → Source** is **Deploy from a branch → `gh-pages`**.
+- Make sure at least one run finished successfully (that's what creates the `gh-pages` branch).
+- Wait 1–2 minutes after the run for Pages to build.
 
-**Cause:** GitHub Pages not enabled or wrong branch selected
+### The page is stale / not updating
+- Confirm the latest run's **Deploy to GitHub Pages** step succeeded.
+- Check the Pages source is still `gh-pages` (not "GitHub Actions").
+- A failed `combine` job (e.g. an earlier step errored) means nothing new was deployed.
 
-**Solution:**
-1. Go to **Settings → Pages**
-2. Ensure **Source** is set to `gh-pages` branch
-3. Wait 1-2 minutes for deployment
+### Images don't load
+- Screenshots **are** deployed now. If they're missing, the runtime step produced no screenshots for that run — check the per-PHP `screens/` folder in the artifact and the runtime log.
 
-### **Issue: Images Not Loading**
+### Need an older report
+- Old reports aren't kept on Pages. Download the `essential-blocks-wp-compat-final` artifact from the relevant workflow run (kept 30 days).
 
-**Cause:** Screenshots are not deployed to GitHub Pages
-
-**Solution:**
-- Screenshots are only available in artifacts
-- Download the full artifact to view screenshots
-- Only the HTML report is hosted on GitHub Pages
-
-### **Issue: Need to Access Old Reports**
-
-**Cause:** Old reports are replaced with each deployment
-
-**Solution:**
-- Download artifacts from previous workflow runs
-- Artifacts are kept for 30 days
-- Go to Actions → Select workflow run → Download artifact
-
-### **Issue: PDF Not Generated**
-
-**Cause:** `wkhtmltopdf` failed
-
-**Solution:**
-- HTML report is still available
-- PDF generation is optional
-- Check workflow logs for errors
+### PDF missing on the page
+- PDF rendering is best-effort (headless Chromium). The HTML report still deploys even if the PDF step fails.
 
 ---
 
-## 🔒 Security Considerations
+## 🔒 Security considerations
 
-### **Public vs Private Repositories**
+- **Public repo:** the report (including screenshots) is publicly accessible at the Pages URL.
+- **Private repo:** GitHub Pages for private repos requires the appropriate plan; otherwise prefer artifacts-only.
+- The report contains admin-area screenshots and logs from a throwaway test site (admin/admin on `127.0.0.1`); it does not expose production data, but treat the URL as you would any internal QA dashboard.
 
-- **Public Repo:** Reports are publicly accessible
-- **Private Repo:** Reports require GitHub authentication
-
-### **Making Reports Private**
-
-If you need to restrict access:
-
-1. **Option 1:** Keep repository private
-   - Only collaborators can access reports
-   - Requires GitHub login
-
-2. **Option 2:** Use password protection
-   - Add authentication to HTML reports
-   - More complex setup
-
-3. **Option 3:** Use artifacts only
-   - Remove GitHub Pages deployment
-   - Download reports from Actions artifacts
+To avoid hosting entirely, remove the **Prepare GitHub Pages** and **Deploy to GitHub Pages** steps and rely on the `essential-blocks-wp-compat-final` artifact.
 
 ---
 
-## 📊 Benefits Over Artifacts
+## 📊 Pages vs. artifacts
 
-| Feature | Artifacts | GitHub Pages |
-|---------|-----------|--------------|
-| **Access** | Download required | Direct browser access |
-| **Sharing** | Send files | Send URL |
-| **History** | 30 days retention | Permanent |
-| **Mobile** | Difficult | Easy |
-| **Search Engines** | No | Yes (if public) |
-
----
-
-## 🎨 Customization
-
-### **Change Report Path**
-
-Edit line 828 in workflow:
-```yaml
-destination_dir: reports/${{ github.run_number }}
-```
-
-Change to:
-```yaml
-destination_dir: my-custom-path/${{ github.run_number }}
-```
-
-### **Add Custom Domain**
-
-1. Add `CNAME` file to `final/` directory
-2. Configure custom domain in **Settings → Pages**
+| | Artifacts | GitHub Pages |
+|---|-----------|--------------|
+| **Access** | Download + unzip | Direct browser URL |
+| **Sharing** | Send files | Send a link |
+| **History** | 30 days, every run | Latest run only |
+| **Contents** | Everything (incl. per-PHP raw logs) | HTML + PDF + screenshots |
 
 ---
 
-## 📝 Next Steps
-
-1. ✅ Enable GitHub Pages (see Step 1)
-2. ✅ Run workflow
-3. ✅ Access your report
-4. ✅ Share URL with team
-5. ✅ Bookmark latest report URL
-
----
-
-**Questions?** Check the workflow logs in the Actions tab for deployment details.
-
+**Questions?** Check the **Deploy to GitHub Pages** step logs in the Actions run.
